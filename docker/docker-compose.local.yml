@@ -36,6 +36,7 @@ services:
       REDIS_URL: redis://redis:6379
       DATABASE_URL: postgresql://ao:localdev@postgres:5432/ao
       LANGFUSE_HOST: http://langfuse:3000
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
     depends_on:
       - redis
       - postgres
