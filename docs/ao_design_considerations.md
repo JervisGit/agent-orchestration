@@ -262,3 +262,6 @@
 
 ### 17.6 Evaluation & Testing
 - A framework for agent evaluation. For example but not limited to, DeepEval    
+
+## 18. How to add agents and tools for each application?
+- just a new json file?
