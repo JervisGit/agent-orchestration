@@ -72,6 +72,7 @@ docker/
 | 5 | Async messaging | **Azure Service Bus** | Event Hubs, Storage Queues |
 | 6 | Auth | **Entra ID** (OBO + Managed Identity) | — |
 | 7 | Hosting | **AKS** (existing cluster) | Container Apps, App Service |
+| 8 | LLM/Agent eval | **DeepEval + Langfuse Evals** | Ragas, custom eval, promptfoo |
 
 ---
 
@@ -176,11 +177,37 @@ Traditional monitoring (Azure Monitor) is insufficient for LLM apps — you need
 |---|---|---|
 | Unit | Policy engine, identity flows, memory ops | pytest, mock LLM calls |
 | Integration | E2E workflow execution | Test LLM endpoint, real Redis/PostgreSQL |
-| Eval | LLM response quality, accuracy | Reference answers, LLM-as-judge |
+| Eval | LLM response quality, accuracy | **DeepEval** (pytest plugin) + **Langfuse Evals** |
 | Security | Prompt injection, PII leakage, permission boundaries | Red-team test cases, automated injection payloads |
 | Load | Concurrent workflow throughput | Locust / k6 |
 
-**CI pipeline**: lint → unit → integration → eval → security scan → build → deploy staging
+### Evaluation Framework: DeepEval + Langfuse Evals
+
+**DeepEval** is the primary evaluation harness for development and CI. It provides:
+
+- **14+ LLM metrics**: faithfulness, answer relevancy, hallucination, bias, toxicity, contextual recall/precision
+- **LLM-as-judge**: use a reference LLM to score agent outputs (no manual labelling)
+- **pytest plugin**: `deepeval test run` integrates into existing test suite and CI pipeline
+- **Regression tracking**: compare scores across runs to catch quality degradation
+- **Custom metrics**: extend with domain-specific scoring functions
+
+**Langfuse Evals** is used for production trace scoring:
+
+- **Score production traces**: attach eval scores directly to Langfuse traces in real-time
+- **Dashboard visibility**: app teams see quality trends per agent/workflow in Langfuse UI
+- **Annotation workflows**: human reviewers can score traces for ground-truth labels
+- **Triggered evals**: run DeepEval metrics on sampled production traces periodically
+
+| Context | Tool | What it does |
+|---|---|---|
+| Development (local) | DeepEval | Run eval suite against mock or local LLM (Ollama) |
+| CI pipeline | DeepEval | Gate deployments on minimum metric thresholds |
+| Production | Langfuse Evals | Score live traces, track quality over time |
+| Review cycles | Langfuse Annotations | Human reviewers label traces to build ground-truth data |
+
+Decision tracked in **ADR-004**.
+
+**CI pipeline**: lint → unit → integration → eval (DeepEval) → security scan → build → deploy staging
 
 ---
 
