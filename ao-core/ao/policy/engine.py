@@ -38,6 +38,20 @@ class PolicyEngine:
         """Register a callable rule handler: handler(data, rule) -> PolicyResult."""
         self._rule_handlers[name] = handler
 
+    def register_builtin_rules(self) -> None:
+        """Register all built-in rule handlers."""
+        from ao.policy.rules.allowed_actions import check_allowed_actions
+        from ao.policy.rules.content_safety import check_content_safety
+        from ao.policy.rules.pii import check_pii
+        from ao.policy.rules.rate_limit import check_rate_limit
+        from ao.policy.rules.token_budget import check_token_budget
+
+        self._rule_handlers["content_safety"] = check_content_safety
+        self._rule_handlers["pii_filter"] = check_pii
+        self._rule_handlers["token_budget"] = check_token_budget
+        self._rule_handlers["rate_limit"] = check_rate_limit
+        self._rule_handlers["allowed_actions"] = check_allowed_actions
+
     async def evaluate(
         self,
         stage: PolicyStage,

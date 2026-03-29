@@ -13,3 +13,21 @@ variable "location" {
   type    = string
   default = "southeastasia"
 }
+
+variable "aks_cluster_name" {
+  type    = string
+  default = "aks-dsai"
+}
+
+variable "postgres_admin_password" {
+  type      = string
+  sensitive = true
+}
+
+variable "tags" {
+  type = map(string)
+  default = {
+    project   = "agent-orchestration"
+    managedBy = "terraform"
+  }
+}

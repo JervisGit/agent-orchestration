@@ -1,0 +1,187 @@
+name: AO CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.13"
+  REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
+
+jobs:
+  # ── Lint & Type Check ────────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: |
+          pip install -e ao-core[dev]
+          pip install ruff mypy
+      - name: Ruff lint
+        run: ruff check ao-core/ ao-platform/ tests/
+      - name: Ruff format check
+        run: ruff format --check ao-core/ ao-platform/ tests/
+
+  # ── Unit Tests ───────────────────────────────────────────────────
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: pip install -e ao-core[dev]
+      - name: Run unit tests
+        run: python -m pytest tests/unit/ -v --junitxml=reports/unit.xml
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results
+          path: reports/unit.xml
+
+  # ── Integration Tests ────────────────────────────────────────────
+  integration-tests:
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: pip install -e ao-core[dev]
+      - name: Run integration tests
+        run: python -m pytest tests/integration/ -v --junitxml=reports/integration.xml
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-results
+          path: reports/integration.xml
+
+  # ── Eval Tests ───────────────────────────────────────────────────
+  eval-tests:
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: pip install -e ao-core[dev]
+      - name: Run eval tests
+        run: python -m pytest tests/eval/ -v --junitxml=reports/eval.xml
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-test-results
+          path: reports/eval.xml
+
+  # ── Security Tests ──────────────────────────────────────────────
+  security-tests:
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: pip install -e ao-core[dev]
+      - name: Run security red-team tests
+        run: python -m pytest tests/security/ -v --junitxml=reports/security.xml
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-test-results
+          path: reports/security.xml
+
+  # ── Build & Push Container Images ────────────────────────────────
+  build:
+    runs-on: ubuntu-latest
+    needs: [integration-tests, eval-tests, security-tests]
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - uses: azure/docker-login@v2
+        with:
+          login-server: ${{ env.REGISTRY }}
+      - name: Build and push ao-api
+        run: |
+          docker build -f docker/Dockerfile.ao-api -t ${{ env.REGISTRY }}/ao-api:${{ github.sha }} .
+          docker push ${{ env.REGISTRY }}/ao-api:${{ github.sha }}
+      - name: Build and push ao-worker
+        run: |
+          docker build -f docker/Dockerfile.ao-worker -t ${{ env.REGISTRY }}/ao-worker:${{ github.sha }} .
+          docker push ${{ env.REGISTRY }}/ao-worker:${{ github.sha }}
+
+  # ── Deploy to Staging ────────────────────────────────────────────
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - uses: azure/aks-set-context@v4
+        with:
+          resource-group: rg-ao-staging
+          cluster-name: aks-dsai-staging
+      - name: Deploy to staging
+        run: |
+          kubectl set image deployment/ao-api ao-api=${{ env.REGISTRY }}/ao-api:${{ github.sha }} -n ao-staging
+          kubectl set image deployment/ao-worker ao-worker=${{ env.REGISTRY }}/ao-worker:${{ github.sha }} -n ao-staging
+          kubectl rollout status deployment/ao-api -n ao-staging --timeout=300s
+
+  # ── Deploy to Production ─────────────────────────────────────────
+  deploy-prod:
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - uses: azure/aks-set-context@v4
+        with:
+          resource-group: rg-ao-prod
+          cluster-name: aks-dsai-prod
+      - name: Deploy to production
+        run: |
+          kubectl set image deployment/ao-api ao-api=${{ env.REGISTRY }}/ao-api:${{ github.sha }} -n ao-prod
+          kubectl set image deployment/ao-worker ao-worker=${{ env.REGISTRY }}/ao-worker:${{ github.sha }} -n ao-prod
+          kubectl rollout status deployment/ao-api -n ao-prod --timeout=300s
