@@ -1,0 +1,57 @@
+# RAG Search — AO App Manifest
+
+app_id: rag_search
+display_name: RAG Search
+description: Internal knowledge search powered by retrieval-augmented generation
+
+# Identity — user-delegated because internal staff are searching,
+# results should be scoped to what the user has access to.
+identity_mode: user_delegated
+service_principal_id: ${RAG_SEARCH_SP_CLIENT_ID}
+
+llm_endpoint: ${AZURE_OPENAI_ENDPOINT}
+llm_api_key_secret: azure-openai-api-key
+
+langfuse_project: rag-search
+
+agents:
+  - name: search_agent
+    system_prompt: |
+      You are a search assistant. Given a user query, search the knowledge base
+      and synthesize a clear answer with citations. If you cannot find relevant
+      information, say so honestly.
+    model: gpt-4o
+    tools:
+      - vector_search
+      - analytics_query
+    temperature: 0.1
+
+tools:
+  - name: vector_search
+    type: search_index
+    description: Vector search over internal document index
+    endpoint: ${AI_SEARCH_ENDPOINT}
+    connection_secret: ai-search-api-key
+    params:
+      index_name: internal-docs
+      top_k: 10
+
+  - name: analytics_query
+    type: adls
+    description: Query analytics tables in Azure Synapse (Delta tables in ADLS)
+    endpoint: ${SYNAPSE_ENDPOINT}
+    connection_secret: synapse-connection-string
+    identity_mode: user_delegated  # Pass user identity to Synapse for row-level security
+    params:
+      database: analytics
+      allowed_tables:
+        - sales_summary
+        - customer_metrics
+
+policies:
+  - name: pii_filter
+    stage: post_execution
+    action: redact
+  - name: token_budget
+    stage: runtime
+    max_tokens_per_run: 50000

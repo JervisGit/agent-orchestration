@@ -1,0 +1,63 @@
+# Email Assistant — AO App Manifest
+# This file registers the email assistant with the AO layer.
+# App team edits this file to configure agents, tools, identity, and policies.
+# No code changes to AO required.
+
+app_id: email_assistant
+display_name: Email Assistant
+description: Processes inbound external emails and drafts responses
+
+# Identity — service identity because it processes external users' emails,
+# not acting on behalf of a logged-in user.
+identity_mode: service
+service_principal_id: ${EMAIL_ASSISTANT_SP_CLIENT_ID}
+
+# LLM — uses shared AO endpoint (app doesn't need its own)
+llm_endpoint: ${AZURE_OPENAI_ENDPOINT}
+llm_api_key_secret: azure-openai-api-key  # Key Vault secret name
+
+# Observability — isolated Langfuse project for this app's traces
+langfuse_project: email-assistant
+
+# Agents
+agents:
+  - name: email_classifier
+    system_prompt: |
+      You are an email classification agent. Classify incoming emails into
+      categories: urgent, billing, support, general. Return only the category.
+    model: gpt-4o-mini
+    tools: []
+    temperature: 0.0
+
+  - name: reply_drafter
+    system_prompt: |
+      You are a professional email reply drafter. Given an email and its
+      classification, draft an appropriate reply. Be concise and professional.
+    model: gpt-4o
+    tools:
+      - knowledge_base
+    temperature: 0.3
+
+# Tools
+tools:
+  - name: knowledge_base
+    type: search_index
+    description: Vector search over company knowledge base for reply context
+    endpoint: ${AI_SEARCH_ENDPOINT}
+    connection_secret: ai-search-api-key
+    params:
+      index_name: email-kb
+      top_k: 5
+
+# Policies
+policies:
+  - name: pii_filter
+    stage: pre_execution
+    action: redact
+  - name: content_safety
+    stage: post_execution
+    action: block
+    provider: azure_content_safety
+  - name: token_budget
+    stage: runtime
+    max_tokens_per_run: 30000

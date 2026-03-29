@@ -25,6 +25,8 @@ ao-core/                        # Python SDK — published as internal package
     resilience/                 # Checkpointing, retry, circuit breaker, dead-letter
     observability/              # OpenTelemetry + Langfuse integration, @trace decorators
     llm/                        # LLM provider abstraction (Azure OpenAI, Foundry, AWS)
+    config/                     # App manifest loader + schema
+      manifest.py               # AppManifest, AgentConfig, ToolConfig dataclasses
   pyproject.toml
 
 ao-platform/                    # Hosted services
@@ -41,9 +43,9 @@ tests/
   unit/  integration/  eval/  security/
 
 examples/                       # DSAI app clones for demo/testing
-  email_assistant/              # Backend + Frontend
-  rag_search/                   # Backend + Frontend
-  graph_compliance/             # Backend + Frontend
+  email_assistant/              # Backend + Frontend + ao-manifest.yaml
+  rag_search/                   # Backend + Frontend + ao-manifest.yaml
+  graph_compliance/             # Backend + Frontend + ao-manifest.yaml
 
 docs/
   architecture.md               # This document
@@ -231,3 +233,178 @@ Traditional monitoring (Azure Monitor) is insufficient for LLM apps — you need
 
 - **In**: AO SDK, platform API, dashboard, infra, DSAI app demos
 - **Out**: Individual DSAI app business logic (own repos in prod), ML training, data pipelines
+
+---
+
+## LLM Ownership: Overlay, Not Replace
+
+DSAI apps that already have LLM calls (e.g., RAG search) **keep them as-is**. AO does not replace existing non-agentic LLM usage. Instead:
+
+| Use case | Where LLM lives | Why |
+|---|---|---|
+| Existing RAG search, summarization | **App** (unchanged) | No disruption, already working |
+| New agentic workflows (multi-step, tool-calling, HITL) | **AO** | AO manages agent reasoning, tool selection, orchestration |
+| Gradual migration | **App → AO** over time | App teams can optionally migrate existing LLM calls to AO for unified tracing/cost tracking |
+
+AO's `LLMProvider` is for **agent reasoning** (deciding what to do, calling tools, generating responses within a workflow). It is not a mandatory replacement for direct LLM calls in app code.
+
+### Adoption path for an existing app
+
+1. `pip install ao-core` (or add to requirements)
+2. Create an `ao-manifest.yaml` in the app repo (see below)
+3. Build workflow steps that call AO's engine — existing app code untouched
+4. Optionally, migrate existing LLM calls to `AzureOpenAIProvider` for unified tracing
+
+---
+
+## App Onboarding: Config-Driven via Manifests
+
+Each DSAI app registers with AO via a **YAML manifest** (`ao-manifest.yaml`). No code changes to AO core are needed. The manifest declares:
+
+- **App identity** — service principal, identity mode
+- **Agents** — name, system prompt, model, tools, temperature
+- **Tools** — type, endpoint, connection secret, identity override
+- **Policies** — guardrails to apply
+- **Observability** — Langfuse project for trace isolation
+
+### Manifest schema
+
+```yaml
+app_id: email_assistant                    # Unique app identifier
+display_name: Email Assistant
+description: Processes inbound emails
+
+# Identity
+identity_mode: service                     # "service" or "user_delegated"
+service_principal_id: ${SP_CLIENT_ID}      # Entra app registration
+
+# LLM
+llm_endpoint: ${AZURE_OPENAI_ENDPOINT}    # Shared or app-specific
+llm_api_key_secret: azure-openai-key       # Key Vault secret name
+
+# Observability — each app gets its own Langfuse project
+langfuse_project: email-assistant
+
+# Agents — each agent has a system prompt + tool access list
+agents:
+  - name: email_classifier
+    system_prompt: |
+      You are an email classification agent...
+    model: gpt-4o-mini
+    tools: []                              # No tools needed for classification
+
+  - name: reply_drafter
+    system_prompt: |
+      You are a professional email reply drafter...
+    model: gpt-4o
+    tools: [knowledge_base]                # Can access the knowledge base tool
+
+# Tools — declarative, no code changes to AO
+tools:
+  - name: knowledge_base
+    type: search_index                     # "api", "database", "search_index", "adls", "custom"
+    description: Vector search over company KB
+    endpoint: ${AI_SEARCH_ENDPOINT}
+    connection_secret: ai-search-api-key   # Key Vault secret name
+    params:
+      index_name: email-kb
+      top_k: 5
+
+  - name: neo4j_query
+    type: database
+    endpoint: ${NEO4J_URI}
+    connection_secret: neo4j-credentials
+    identity_mode: user_delegated          # Override: use caller's identity
+    params:
+      database: compliance
+      read_only: true                      # Safety: no writes
+
+  - name: analytics_query
+    type: adls
+    endpoint: ${SYNAPSE_ENDPOINT}
+    connection_secret: synapse-connection
+    identity_mode: user_delegated
+    params:
+      database: analytics
+      allowed_tables: [sales_summary, customer_metrics]
+
+  - name: internal_system_api
+    type: api
+    endpoint: ${INTERNAL_SYSTEM_API_URL}
+    connection_secret: internal-api-key
+    params:
+      timeout_seconds: 30
+
+# Policies
+policies:
+  - name: pii_filter
+    stage: pre_execution
+    action: redact
+  - name: content_safety
+    stage: post_execution
+    action: block
+  - name: token_budget
+    stage: runtime
+    max_tokens_per_run: 30000
+```
+
+### Adding a new agent
+
+Edit `ao-manifest.yaml` — add an entry under `agents:` with a name, system prompt, model, and tool access list. No AO code changes.
+
+### Adding a new tool
+
+Edit `ao-manifest.yaml` — add an entry under `tools:` with type + connection details. For **standard types** (`api`, `database`, `search_index`, `adls`), AO provides built-in adapters. For **custom types**, implement a tool function in the app and register it via `ToolRegistry`.
+
+### Identity assignment
+
+Each app has an **Entra service principal** (`service_principal_id`). This is the app's identity in Azure. The `identity_mode` at manifest level sets the default; individual tools can override it (e.g., Neo4j tool uses `user_delegated` even if the app default is `service`).
+
+---
+
+## Tool Architecture
+
+Tools are the interface between agents and external systems. AO provides built-in adapters for common tool types:
+
+| Tool type | Adapter | External system |
+|---|---|---|
+| `api` | REST client with auth | Any REST API (internal systems) |
+| `database` | DB query executor | Neo4j, PostgreSQL, SQL Server |
+| `search_index` | Vector/hybrid search | Azure AI Search, pgvector |
+| `adls` | Spark SQL via Synapse | Delta tables in ADLS |
+| `custom` | User-provided function | Anything else |
+
+### MCP (Model Context Protocol) — Future consideration
+
+Currently, tools are registered via `ao-manifest.yaml` → `ToolRegistry`. In the future, AO could expose an **MCP server** so that agents can discover and invoke tools through the MCP standard. This would allow:
+
+- External agent frameworks to consume AO's tools
+- AO agents to consume external MCP servers (e.g., from partner teams)
+
+For now, the `ToolRegistry` approach is simpler and sufficient. MCP can be layered on top without breaking changes. Tracked as a future ADR.
+
+---
+
+## Observability RBAC: Per-App Trace Isolation
+
+Each DSAI app maps to a **Langfuse project**. Langfuse supports project-level access control:
+
+| Role | Access | Example |
+|---|---|---|
+| App developer | Read traces for **their app's project only** | Email assistant team sees only `email-assistant` project |
+| AO platform admin | Read all projects | Platform team sees all traces for debugging cross-app issues |
+| Auditor | Read-only across projects | Compliance review of all LLM interactions |
+
+### How it works
+
+1. App's `ao-manifest.yaml` declares `langfuse_project: email-assistant`
+2. AO's `AOTracer` routes traces to that project automatically
+3. Langfuse RBAC (backed by Entra ID SSO) controls who can access which project
+4. AO Dashboard proxies Langfuse data with additional RBAC filtering
+
+### What each app team can see
+
+- All traces/spans for their app's workflows
+- LLM call details: prompts, completions, token usage, latency, cost
+- Evaluation scores and error rates
+- **Cannot** see other apps' traces

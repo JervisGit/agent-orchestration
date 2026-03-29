@@ -1,0 +1,66 @@
+# Graph Compliance (Neo4j) — AO App Manifest
+
+app_id: graph_compliance
+display_name: Graph Compliance
+description: Compliance investigation tool for internal officers using Neo4j knowledge graph
+
+# Identity — user-delegated because internal compliance officers
+# need audit trail of who queried what.
+identity_mode: user_delegated
+service_principal_id: ${GRAPH_COMPLIANCE_SP_CLIENT_ID}
+
+llm_endpoint: ${AZURE_OPENAI_ENDPOINT}
+llm_api_key_secret: azure-openai-api-key
+
+langfuse_project: graph-compliance
+
+agents:
+  - name: compliance_planner
+    system_prompt: |
+      You are a compliance investigation planner. Given a compliance query,
+      break it down into investigation steps: which entities to look up,
+      which relationships to traverse, and what risk indicators to check.
+    model: gpt-4o
+    tools: []
+    temperature: 0.0
+
+  - name: graph_investigator
+    system_prompt: |
+      You are a graph database investigator. Execute Cypher queries against
+      the Neo4j compliance graph to find entities, relationships, and patterns.
+      Always explain your findings clearly.
+    model: gpt-4o
+    tools:
+      - neo4j_query
+      - internal_system_api
+    temperature: 0.0
+
+tools:
+  - name: neo4j_query
+    type: database
+    description: Execute Cypher queries against the Neo4j compliance graph
+    endpoint: ${NEO4J_URI}
+    connection_secret: neo4j-credentials
+    identity_mode: user_delegated
+    params:
+      database: compliance
+      read_only: true  # Safety: agents cannot mutate the graph
+
+  - name: internal_system_api
+    type: api
+    description: Query internal regulatory system via REST API
+    endpoint: ${INTERNAL_SYSTEM_API_URL}
+    connection_secret: internal-system-api-key
+    params:
+      timeout_seconds: 30
+
+policies:
+  - name: pii_filter
+    stage: post_execution
+    action: redact
+  - name: content_safety
+    stage: pre_execution
+    action: block
+  - name: token_budget
+    stage: runtime
+    max_tokens_per_run: 80000
