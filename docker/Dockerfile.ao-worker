@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY ao-core/ ./ao-core/
+COPY ao-platform/workers/ ./workers/
+
+RUN pip install --no-cache-dir ./ao-core
+
+CMD ["python", "-m", "workers"]

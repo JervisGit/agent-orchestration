@@ -1,0 +1,1 @@
+"""Identity-scoped tool execution."""
