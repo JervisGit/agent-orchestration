@@ -134,10 +134,49 @@ jobs:
           docker build -f docker/Dockerfile.ao-worker -t ${{ env.REGISTRY }}/ao-worker:${{ github.sha }} .
           docker push ${{ env.REGISTRY }}/ao-worker:${{ github.sha }}
 
-  # ── Deploy to Staging ────────────────────────────────────────────
-  deploy-staging:
+  # ── Deploy to Dev ────────────────────────────────────────────────
+  deploy-dev:
     runs-on: ubuntu-latest
     needs: build
+    if: github.ref == 'refs/heads/main'
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ── ACA deploy path ──
+      - name: Deploy to Container Apps (ACA)
+        if: vars.COMPUTE_PLATFORM == 'aca'
+        run: |
+          az containerapp update \
+            --name ca-ao-api-dev \
+            --resource-group rg-ao-dev \
+            --image ${{ env.REGISTRY }}/ao-api:${{ github.sha }}
+          az containerapp update \
+            --name ca-ao-worker-dev \
+            --resource-group rg-ao-dev \
+            --image ${{ env.REGISTRY }}/ao-worker:${{ github.sha }}
+
+      # ── AKS deploy path ──
+      - name: Deploy to AKS
+        if: vars.COMPUTE_PLATFORM == 'aks'
+        run: |
+          az aks get-credentials --resource-group rg-ao-dev --name ${{ vars.AKS_CLUSTER_NAME }}
+          kubectl set image deployment/ao-api ao-api=${{ env.REGISTRY }}/ao-api:${{ github.sha }} -n ao-dev
+          kubectl set image deployment/ao-worker ao-worker=${{ env.REGISTRY }}/ao-worker:${{ github.sha }} -n ao-dev
+          kubectl rollout status deployment/ao-api -n ao-dev --timeout=300s
+
+  # ── Deploy to Staging (AKS) ─────────────────────────────────────
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: deploy-dev
     if: github.ref == 'refs/heads/main'
     environment: staging
     permissions:
@@ -150,17 +189,14 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - uses: azure/aks-set-context@v4
-        with:
-          resource-group: rg-ao-staging
-          cluster-name: aks-dsai-staging
-      - name: Deploy to staging
+      - name: Deploy to staging AKS
         run: |
+          az aks get-credentials --resource-group rg-ao-staging --name aks-dsai-staging
           kubectl set image deployment/ao-api ao-api=${{ env.REGISTRY }}/ao-api:${{ github.sha }} -n ao-staging
           kubectl set image deployment/ao-worker ao-worker=${{ env.REGISTRY }}/ao-worker:${{ github.sha }} -n ao-staging
           kubectl rollout status deployment/ao-api -n ao-staging --timeout=300s
 
-  # ── Deploy to Production ─────────────────────────────────────────
+  # ── Deploy to Production (AKS, manual gate) ─────────────────────
   deploy-prod:
     runs-on: ubuntu-latest
     needs: deploy-staging
@@ -176,12 +212,9 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - uses: azure/aks-set-context@v4
-        with:
-          resource-group: rg-ao-prod
-          cluster-name: aks-dsai-prod
-      - name: Deploy to production
+      - name: Deploy to production AKS
         run: |
+          az aks get-credentials --resource-group rg-ao-prod --name aks-dsai-prod
           kubectl set image deployment/ao-api ao-api=${{ env.REGISTRY }}/ao-api:${{ github.sha }} -n ao-prod
           kubectl set image deployment/ao-worker ao-worker=${{ env.REGISTRY }}/ao-worker:${{ github.sha }} -n ao-prod
           kubectl rollout status deployment/ao-api -n ao-prod --timeout=300s

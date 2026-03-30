@@ -3,23 +3,26 @@
 variable "environment" { type = string }
 variable "resource_group_name" { type = string }
 variable "location" { type = string }
-variable "admin_password" { type = string; sensitive = true }
+variable "admin_password" {
+  type      = string
+  sensitive = true
+}
 variable "key_vault_id" { type = string }
 variable "tags" { type = map(string) }
 
 # ── PostgreSQL Flexible Server ─────────────────────────────────────
 
 resource "azurerm_postgresql_flexible_server" "ao" {
-  name                          = "psql-ao-${var.environment}"
-  resource_group_name           = var.resource_group_name
-  location                      = var.location
-  version                       = "16"
-  administrator_login           = "aoadmin"
-  administrator_password        = var.admin_password
-  storage_mb                    = var.environment == "prod" ? 65536 : 32768
-  sku_name                      = var.environment == "prod" ? "GP_Standard_D2s_v3" : "B_Standard_B1ms"
-  backup_retention_days         = var.environment == "prod" ? 35 : 7
-  geo_redundant_backup_enabled  = var.environment == "prod"
+  name                         = "psql-ao-${var.environment}"
+  resource_group_name          = var.resource_group_name
+  location                     = var.location
+  version                      = "16"
+  administrator_login          = "aoadmin"
+  administrator_password       = var.admin_password
+  storage_mb                   = var.environment == "prod" ? 65536 : 32768
+  sku_name                     = var.environment == "prod" ? "GP_Standard_D2s_v3" : "B_Standard_B1ms"
+  backup_retention_days        = var.environment == "prod" ? 35 : 7
+  geo_redundant_backup_enabled = var.environment == "prod"
 
   tags = var.tags
 }
@@ -48,13 +51,13 @@ resource "azurerm_key_vault_secret" "pg_connection" {
 # ── Azure Cache for Redis ──────────────────────────────────────────
 
 resource "azurerm_redis_cache" "ao" {
-  name                = "redis-ao-${var.environment}"
-  location            = var.location
-  resource_group_name = var.resource_group_name
-  capacity            = var.environment == "prod" ? 1 : 0
-  family              = "C"
-  sku_name            = var.environment == "prod" ? "Standard" : "Basic"
-  minimum_tls_version = "1.2"
+  name                 = "redis-ao-${var.environment}"
+  location             = var.location
+  resource_group_name  = var.resource_group_name
+  capacity             = var.environment == "prod" ? 1 : 0
+  family               = "C"
+  sku_name             = var.environment == "prod" ? "Standard" : "Basic"
+  minimum_tls_version  = "1.2"
   non_ssl_port_enabled = false
 
   redis_configuration {}

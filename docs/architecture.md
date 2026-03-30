@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Build a shared AO SDK (`ao-core` Python package) + Platform Services that DSAI apps import, avoiding per-app re-implementation. **LangGraph** as orchestration engine, **Langfuse** (self-hosted on AKS) for LLM observability, **FastAPI** for platform API, **Vue.js** dashboard for trace debugging + HITL approvals.
+Build a shared AO SDK (`ao-core` Python package) + Platform Services that DSAI apps import, avoiding per-app re-implementation. **LangGraph** as orchestration engine, **Langfuse** for LLM observability (Cloud free tier on ACA, self-hosted on AKS), **FastAPI** for platform API, **Vue.js** dashboard for trace debugging + HITL approvals.
 
 ---
 
@@ -35,7 +35,7 @@ ao-platform/                    # Hosted services
   workers/                      # Background: dead-letter processing, eval jobs
 
 infra/                          # Terraform
-  modules/                      # aks/, database/, messaging/, observability/, security/, ai/
+  modules/                      # aca/, aks/, database/, messaging/, observability/, security/, ai/, registry/
   environments/                 # dev.tfvars, staging.tfvars, prod.tfvars
   main.tf
 
@@ -66,12 +66,12 @@ docker/
 | # | Decision | Chosen | Alternatives (tracked in ADRs) |
 |---|---|---|---|
 | 1 | Orchestration framework | **LangGraph** | Semantic Kernel, AutoGen, CrewAI |
-| 2 | LLM observability | **Langfuse** (self-hosted on AKS) | LangSmith, Phoenix/Arize, Azure AI Foundry Tracing |
+| 2 | LLM observability | **Langfuse** (Cloud free tier for ACA; self-hosted for AKS) | LangSmith, Phoenix/Arize, Azure AI Foundry Tracing |
 | 3 | State store | **PostgreSQL + Redis** | Cosmos DB, Redis-only |
 | 4 | Architecture model | **SDK + platform services** | Pure SDK, pure platform/SaaS |
 | 5 | Async messaging | **Azure Service Bus** | Event Hubs, Storage Queues |
 | 6 | Auth | **Entra ID** (OBO + Managed Identity) | — |
-| 7 | Hosting | **AKS** (existing cluster) | Container Apps, App Service |
+| 7 | Hosting | **ACA** (default) / **AKS** (toggle) | App Service |
 | 8 | LLM/Agent eval | **DeepEval + Langfuse Evals** | Ragas, custom eval, promptfoo |
 
 ---
@@ -148,7 +148,7 @@ Traditional monitoring (Azure Monitor) is insufficient for LLM apps — you need
 
 | Layer | Tool | Purpose |
 |---|---|---|
-| LLM-specific | **Langfuse** (self-hosted on AKS) | Prompt/completion pairs, tokens, cost, eval scores, trace trees |
+| LLM-specific | **Langfuse** (Cloud free tier / self-hosted) | Prompt/completion pairs, tokens, cost, eval scores, trace trees |
 | Distributed tracing | **OpenTelemetry SDK** | Correlate AO calls with app calls across services |
 | Infrastructure | **Azure Monitor / App Insights** | CPU, memory, request rates, errors |
 | Debugging | **AO Dashboard** (Vue.js) | Workflow-level step-by-step trace viewer |
@@ -159,7 +159,8 @@ Traditional monitoring (Azure Monitor) is insufficient for LLM apps — you need
 
 | Resource | Purpose |
 |---|---|
-| AKS namespace | AO API, workers, Langfuse |
+| ACA Container Apps Environment | AO API + workers (default, scales to zero) |
+| AKS namespace | AO API + workers + Langfuse (toggle, for company cluster) |
 | PostgreSQL Flexible Server | Long-term memory, workflow state, audit |
 | Azure Cache for Redis | Short-term memory, caching |
 | Azure Service Bus | Inter-agent comms, dead-letter, resilience |

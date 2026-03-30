@@ -27,17 +27,20 @@ resource "azurerm_application_insights" "ao" {
   tags = var.tags
 }
 
-# ── Langfuse (deployed as a container on AKS) ─────────────────────
+# ── Langfuse ───────────────────────────────────────────────────────
 #
-# Langfuse is self-hosted via Helm chart on AKS, not a native Azure
-# resource. Configuration here captures the App Insights connection
-# for correlation. The actual Langfuse Helm deployment is managed
-# via the CI/CD pipeline (see .github/workflows/deploy.yml).
+# Langfuse strategy depends on compute_platform (set in root module):
 #
-# Langfuse environment variables reference:
-#   DATABASE_URL  → PostgreSQL from database module
-#   NEXTAUTH_URL  → Langfuse ingress URL
-#   NEXTAUTH_SECRET → Key Vault secret
+# ACA mode  → Langfuse Cloud (free tier, https://cloud.langfuse.com)
+#             No infra to manage. Set LANGFUSE_HOST, PUBLIC_KEY, SECRET_KEY
+#             as env vars on the Container Apps.
+#
+# AKS mode  → Self-hosted via Helm chart on AKS namespace.
+#             DATABASE_URL → PostgreSQL from database module
+#             NEXTAUTH_URL → Langfuse ingress URL
+#             NEXTAUTH_SECRET → Key Vault secret
+#
+# From the SDK side both are identical: same env vars, same API.
 
 output "app_insights_connection_string" {
   value     = azurerm_application_insights.ao.connection_string

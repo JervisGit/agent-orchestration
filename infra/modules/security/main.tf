@@ -78,6 +78,14 @@ output "ao_api_identity_id" {
   value = azurerm_user_assigned_identity.ao_api.id
 }
 
+output "ao_api_identity_principal_id" {
+  value = azurerm_user_assigned_identity.ao_api.principal_id
+}
+
 output "ao_worker_identity_id" {
   value = azurerm_user_assigned_identity.ao_worker.id
+}
+
+output "ao_worker_identity_principal_id" {
+  value = azurerm_user_assigned_identity.ao_worker.principal_id
 }

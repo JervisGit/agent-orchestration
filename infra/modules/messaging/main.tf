@@ -16,28 +16,28 @@ resource "azurerm_servicebus_namespace" "ao" {
 
 # Dead-letter topic for failed workflow steps
 resource "azurerm_servicebus_topic" "dead_letter" {
-  name                = "ao-dead-letter"
-  namespace_id        = azurerm_servicebus_namespace.ao.id
+  name                  = "ao-dead-letter"
+  namespace_id          = azurerm_servicebus_namespace.ao.id
   max_size_in_megabytes = 1024
 }
 
 resource "azurerm_servicebus_subscription" "dead_letter_processor" {
-  name                = "dead-letter-processor"
-  topic_id            = azurerm_servicebus_topic.dead_letter.id
-  max_delivery_count  = 5
+  name               = "dead-letter-processor"
+  topic_id           = azurerm_servicebus_topic.dead_letter.id
+  max_delivery_count = 5
 }
 
 # Cross-workflow messaging topic
 resource "azurerm_servicebus_topic" "workflow_events" {
-  name                = "ao-workflow-events"
-  namespace_id        = azurerm_servicebus_namespace.ao.id
+  name                  = "ao-workflow-events"
+  namespace_id          = azurerm_servicebus_namespace.ao.id
   max_size_in_megabytes = 1024
 }
 
 resource "azurerm_servicebus_subscription" "event_consumer" {
-  name                = "event-consumer"
-  topic_id            = azurerm_servicebus_topic.workflow_events.id
-  max_delivery_count  = 3
+  name               = "event-consumer"
+  topic_id           = azurerm_servicebus_topic.workflow_events.id
+  max_delivery_count = 3
 }
 
 output "servicebus_namespace_id" {
