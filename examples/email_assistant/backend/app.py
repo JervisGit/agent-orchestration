@@ -1,170 +1,203 @@
-"""Email Assistant — FastAPI backend.
+"""Tax Email Assistant — FastAPI backend (Taxpayer Edition).
 
-A DSAI demo app that uses AO SDK to classify inbound emails,
-route them to specialist agents, draft replies, and enforce policies.
+Classifies inbound taxpayer emails, looks up the taxpayer record from
+PostgreSQL, routes to a specialist agent with SOP-grounded prompts,
+enforces guardrail policies, and drafts a reply.
 
-Run:
-    cd examples/email_assistant
-    uvicorn backend.app:app --reload --port 8001
+Categories
+----------
+  filing_extension    — Request to extend the submission deadline
+  payment_arrangement — Instalment plan / payment difficulty
+  assessment_relief   — Objection or appeal against a tax assessment
+  penalty_waiver      — Request to waive a late-filing / late-payment penalty
+  general_inquiry     — All other tax questions
+
+Run (from project root):
+    uvicorn backend.app:app --reload --port 8001 --app-dir examples/email_assistant
 """
 
+import logging
 import os
-import asyncio
+import re
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import TypedDict
 
+import psycopg
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+from langgraph.graph import END, StateGraph
+from psycopg.rows import dict_row
 from pydantic import BaseModel
 
-from ao.engine.patterns.router import RouterState, build_router
 from ao.llm.base import LLMProvider
 from ao.policy.engine import PolicyEngine
-from ao.policy.schema import PolicySet, PolicyStage
+from ao.policy.schema import PolicySet
 
-# ── Load env vars ──────────────────────────────────────────────────
+# ── Config ─────────────────────────────────────────────────────────
 load_dotenv(Path(__file__).resolve().parents[3] / ".env")
+logger = logging.getLogger("tax_email_assistant")
+FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://ao:localdev@localhost:5432/ao")
 
-# ── LLM provider selection ─────────────────────────────────────────
 
-
+# ── LLM ────────────────────────────────────────────────────────────
 def _create_llm() -> LLMProvider:
     if os.getenv("OPENAI_API_KEY"):
         from ao.llm.openai import OpenAIProvider
-
         return OpenAIProvider(
             api_key=os.environ["OPENAI_API_KEY"],
             default_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
         )
-    elif os.getenv("AZURE_OPENAI_ENDPOINT"):
+    if os.getenv("AZURE_OPENAI_ENDPOINT"):
         from ao.llm.azure_openai import AzureOpenAIProvider
-
         return AzureOpenAIProvider(
             endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
             api_key=os.getenv("AZURE_OPENAI_API_KEY"),
         )
-    elif os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_MODEL"):
+    if os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_MODEL"):
         from ao.llm.ollama import OllamaProvider
-
         return OllamaProvider(
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
             default_model=os.getenv("OLLAMA_MODEL", "gemma3:1b"),
         )
-    else:
-        raise RuntimeError(
-            "No LLM configured. Set OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, or OLLAMA_BASE_URL in .env"
-        )
-
+    raise RuntimeError("No LLM configured. Set OPENAI_API_KEY in .env")
 
 llm = _create_llm()
 
-# ── Policy engine ──────────────────────────────────────────────────
-
+# ── Policy engine ───────────────────────────────────────────────────
 policy_engine = PolicyEngine()
 policy_engine.register_builtin_rules()
-
 policies = PolicySet.from_yaml("""
 policies:
-  - name: content_safety
-    stage: post_execution
-    action: warn
   - name: pii_filter
     stage: post_execution
     action: redact
+  - name: content_safety
+    stage: post_execution
+    action: warn
+  - name: tax_accuracy
+    stage: post_execution
+    action: warn
 """)
 
-# ── In-memory email store (demo) ──────────────────────────────────
+# ── Standard Operating Procedures ──────────────────────────────────
+# Embedded into each specialist agent's system prompt.
+# Production: load from a knowledge base / RAG pipeline.
 
-SAMPLE_EMAILS = [
-    {
-        "id": "em-001",
-        "from": "angry.customer@example.com",
-        "subject": "Broken product received!",
-        "body": (
-            "My order #12345 arrived completely smashed. The box was torn open "
-            "and the product inside is broken beyond repair. This is the second "
-            "time this has happened. I want a full refund immediately or I'm "
-            "filing a complaint with consumer protection."
-        ),
-        "status": "new",
-        "category": None,
-        "draft_reply": None,
-    },
-    {
-        "id": "em-002",
-        "from": "jane.doe@company.org",
-        "subject": "Return policy question",
-        "body": (
-            "Hi, I purchased a winter jacket (order #67890) last week but it "
-            "doesn't fit well. Could you let me know what your return/exchange "
-            "policy is? I'd like to swap it for a size larger if possible."
-        ),
-        "status": "new",
-        "category": None,
-        "draft_reply": None,
-    },
-    {
-        "id": "em-003",
-        "from": "happy.buyer@gmail.com",
-        "subject": "Amazing service!",
-        "body": (
-            "Just wanted to drop a note to say how impressed I am with your "
-            "service. The delivery was lightning fast, packaging was perfect, "
-            "and the product quality exceeded expectations. You've earned a "
-            "loyal customer. Will definitely recommend to friends!"
-        ),
-        "status": "new",
-        "category": None,
-        "draft_reply": None,
-    },
-    {
-        "id": "em-004",
-        "from": "tech.lead@startup.io",
-        "subject": "API integration help",
-        "body": (
-            "We're integrating your REST API into our platform and running into "
-            "issues with the authentication flow. The OAuth token seems to expire "
-            "before our batch job completes. Is there a way to get a longer-lived "
-            "token, or should we implement token refresh logic?"
-        ),
-        "status": "new",
-        "category": None,
-        "draft_reply": None,
-    },
-    {
-        "id": "em-005",
-        "from": "billing@enterprise.com",
-        "subject": "Invoice discrepancy",
-        "body": (
-            "Our accounts team noticed that invoice #INV-2026-0042 shows a charge "
-            "of $4,500 but our purchase order was for $3,800. Could you review "
-            "this and send a corrected invoice? Our PO number is PO-2026-1187. "
-            "Please contact me at john.smith@enterprise.com or call 555-0147."
-        ),
-        "status": "new",
-        "category": None,
-        "draft_reply": None,
-    },
-]
+SOPS: dict[str, str] = {
+    "filing_extension": """
+STANDARD OPERATING PROCEDURE — Filing Extension Request
+1. Extension must be requested BEFORE the original filing deadline.
+2. Maximum extension granted: 30 calendar days per tax year.
+3. Only ONE extension per tax year per taxpayer is permitted.
+4. Individuals use Form B-Ext; Corporations use Form C-Ext.
+5. Late requests (after deadline) require documented grounds (hospitalisation, natural disaster).
+6. Acknowledge the request, state the decision/next steps, and provide the form reference.
+""",
+    "payment_arrangement": """
+STANDARD OPERATING PROCEDURE — Payment Arrangement
+1. Confirm the outstanding balance from the taxpayer record before responding.
+2. Maximum instalment plan duration: 12 months.
+3. Minimum monthly instalment: SGD 100.
+4. If an ACTIVE plan already exists, offer to amend it — do not create a second plan.
+5. Interest accrues at 1.5% per month on the remaining balance during the arrangement.
+6. Include a payment reference and remind the taxpayer to retain all receipts.
+""",
+    "assessment_relief": """
+STANDARD OPERATING PROCEDURE — Assessment Objection / Relief
+1. Objection window: 30 days from the date of the Notice of Assessment (NOA).
+2. Requests received AFTER 30 days require special grounds — flag for senior review.
+3. Taxpayer must state specific grounds (arithmetic error, omitted deduction, wrong income, etc.).
+4. Required documents: copy of NOA + supporting evidence.
+5. Processing time: up to 90 working days after all documents received.
+6. Acknowledge receipt, confirm the objection window, list required documents.
+""",
+    "penalty_waiver": """
+STANDARD OPERATING PROCEDURE — Penalty Waiver Request
+1. Check the taxpayer's PENALTY COUNT from their record:
+   - Count 0-1: Proceed — grant waiver if underlying tax is paid in full.
+   - Count 2  : Requires compelling mitigating circumstance (illness, redundancy).
+   - Count 3+ : DO NOT make a waiver decision — escalate to supervisor (HITL required).
+2. Waiver applies to the PENALTY AMOUNT only; underlying tax remains payable.
+3. Do not commit to a waiver outcome without confirming full payment status.
+4. Acknowledge the request and state next steps based on the count rule above.
+""",
+    "general_inquiry": """
+STANDARD OPERATING PROCEDURE — General Tax Inquiry
+1. Provide accurate, factual information based on known tax regulations.
+2. Do NOT give legal or financial advice; recommend professional consultation for complex matters.
+3. Address the taxpayer by name if known from the taxpayer record.
+4. Be concise, clear, and professional.
+5. For specialist topics (objections, penalties), refer the taxpayer to the correct division.
+""",
+}
 
-emails_db: dict[str, dict] = {e["id"]: dict(e) for e in SAMPLE_EMAILS}
-processing_log: list[dict] = []
+VALID_CATEGORIES = set(SOPS.keys())
 
-# ── Agent functions ────────────────────────────────────────────────
+# ── Graph state ─────────────────────────────────────────────────────
 
+class TaxEmailState(TypedDict):
+    email_id: str
+    sender: str
+    subject: str
+    input: str              # full email text
+    route: str              # category chosen by classifier
+    messages: list[dict]
+    output: str             # draft reply
+    taxpayer: dict | None   # row from taxpayers table (or None if not found)
+    trace_id: str
+    policy_flags: list[str]
+    hitl_required: bool
 
-async def classify_email(state: RouterState) -> dict:
+# ── DB lookup ───────────────────────────────────────────────────────
+
+_TIN_RE = re.compile(r'\bSG-T\d{3}-\d{4}\b', re.IGNORECASE)
+
+async def _db_lookup_taxpayer(sender_email: str, tin: str | None) -> dict | None:
+    try:
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL, row_factory=dict_row) as conn:
+            if tin:
+                cur = await conn.execute(
+                    "SELECT * FROM taxpayers WHERE tax_id = %s", (tin.upper(),)
+                )
+            else:
+                cur = await conn.execute(
+                    "SELECT * FROM taxpayers WHERE email = %s", (sender_email.lower(),)
+                )
+            return await cur.fetchone()
+    except Exception as exc:
+        logger.warning("Taxpayer DB lookup failed: %s", exc)
+        return None
+
+# ── Graph nodes ─────────────────────────────────────────────────────
+
+async def node_lookup_taxpayer(state: TaxEmailState) -> dict:
+    """Extract TIN from email body (regex) or fall back to sender email lookup."""
+    match = _TIN_RE.search(state["input"])
+    tin = match.group(0) if match else None
+    taxpayer = await _db_lookup_taxpayer(state["sender"], tin)
+    return {"taxpayer": taxpayer, "messages": []}
+
+async def node_classify(state: TaxEmailState) -> dict:
+    """LLM classifies the email into a tax-authority-specific category."""
     resp = await llm.complete(
         messages=[
             {
                 "role": "system",
                 "content": (
-                    "You are an email classifier. Classify the email into exactly "
-                    "one of: complaint, inquiry, positive_feedback, technical_support, billing. "
-                    "Reply with ONLY the category name, nothing else."
+                    "You are a tax authority email triage classifier.\n"
+                    "Classify the email into exactly ONE of:\n"
+                    "  filing_extension    — requesting a deadline extension to file\n"
+                    "  payment_arrangement — payment plan, instalments, paying difficulties\n"
+                    "  assessment_relief   — objection or appeal against a tax assessment\n"
+                    "  penalty_waiver      — requesting a penalty or surcharge to be waived\n"
+                    "  general_inquiry     — all other tax questions\n\n"
+                    "Reply with ONLY the category name. Nothing else."
                 ),
             },
             {"role": "user", "content": state["input"]},
@@ -172,129 +205,232 @@ async def classify_email(state: RouterState) -> dict:
         temperature=0.0,
     )
     raw = resp.content.strip().lower().replace(" ", "_")
-    valid = {"complaint", "inquiry", "positive_feedback", "technical_support", "billing"}
-    route = raw if raw in valid else "inquiry"
+    route = raw if raw in VALID_CATEGORIES else "general_inquiry"
     return {
         "route": route,
         "messages": [{"role": "classifier", "content": route}],
     }
 
+def _format_taxpayer_context(tp: dict | None) -> str:
+    if not tp:
+        return "── Taxpayer record NOT FOUND in database. Proceed cautiously. ──"
+    return (
+        f"Name          : {tp.get('full_name', '—')}\n"
+        f"Tax ID        : {tp.get('tax_id', '—')}\n"
+        f"Entity Type   : {tp.get('entity_type', '—')}\n"
+        f"Filing Status : {tp.get('filing_status', '—')}\n"
+        f"Assessment Yr : {tp.get('assessment_year', '—')}\n"
+        f"Assessed Amt  : SGD {float(tp.get('assessed_amount') or 0):,.2f}\n"
+        f"Outstanding   : SGD {float(tp.get('outstanding_balance') or 0):,.2f}\n"
+        f"Payment Plan  : {'Active' if tp.get('payment_plan_active') else 'None'}\n"
+        f"Penalty Count : {tp.get('penalty_count', 0)}\n"
+        f"Notes         : {tp.get('notes', '—')}"
+    )
 
-async def _draft_reply(state: RouterState, persona: str, temp: float = 0.3) -> dict:
+async def _specialist(state: TaxEmailState, category: str) -> dict:
+    sop = SOPS[category]
+    tp_ctx = _format_taxpayer_context(state.get("taxpayer"))
     resp = await llm.complete(
         messages=[
-            {"role": "system", "content": persona},
+            {
+                "role": "system",
+                "content": (
+                    f"You are a tax authority officer handling "
+                    f"{category.replace('_', ' ')} cases.\n\n"
+                    f"TAXPAYER RECORD FROM DATABASE:\n{tp_ctx}\n\n"
+                    f"SOP YOU MUST FOLLOW:\n{sop}\n"
+                    "Draft a professional reply email. Address the taxpayer by name. "
+                    "Follow the SOP strictly — do not invent policies. "
+                    "Keep the reply under 200 words."
+                ),
+            },
             {"role": "user", "content": state["input"]},
         ],
-        temperature=temp,
+        temperature=0.2,
     )
     return {
         "output": resp.content,
         "messages": [*state["messages"], {"role": "agent", "content": resp.content}],
     }
 
+async def node_filing_extension(state: TaxEmailState) -> dict:
+    return await _specialist(state, "filing_extension")
 
-async def handle_complaint(state: RouterState) -> dict:
-    return await _draft_reply(
-        state,
-        "You are a senior customer service agent handling complaints. "
-        "Acknowledge the issue, apologize sincerely, and offer a concrete resolution "
-        "(refund, replacement, or escalation). Keep it under 120 words.",
+async def node_payment_arrangement(state: TaxEmailState) -> dict:
+    return await _specialist(state, "payment_arrangement")
+
+async def node_assessment_relief(state: TaxEmailState) -> dict:
+    return await _specialist(state, "assessment_relief")
+
+async def node_penalty_waiver(state: TaxEmailState) -> dict:
+    result = await _specialist(state, "penalty_waiver")
+    tp = state.get("taxpayer")
+    hitl = bool(tp and (tp.get("penalty_count") or 0) >= 3)
+    flags = list(state.get("policy_flags", []))
+    if hitl:
+        flags.append(
+            f"HITL_REQUIRED: {tp.get('tax_id')} has {tp.get('penalty_count')} "
+            "penalties — waiver decision requires supervisor approval"
+        )
+    result["policy_flags"] = flags
+    result["hitl_required"] = hitl
+    return result
+
+async def node_general_inquiry(state: TaxEmailState) -> dict:
+    return await _specialist(state, "general_inquiry")
+
+# ── Build LangGraph ─────────────────────────────────────────────────
+
+def _build_graph() -> StateGraph:
+    g = StateGraph(TaxEmailState)
+    g.add_node("lookup_taxpayer",     node_lookup_taxpayer)
+    g.add_node("classify",            node_classify)
+    g.add_node("filing_extension",    node_filing_extension)
+    g.add_node("payment_arrangement", node_payment_arrangement)
+    g.add_node("assessment_relief",   node_assessment_relief)
+    g.add_node("penalty_waiver",      node_penalty_waiver)
+    g.add_node("general_inquiry",     node_general_inquiry)
+    g.set_entry_point("lookup_taxpayer")
+    g.add_edge("lookup_taxpayer", "classify")
+    g.add_conditional_edges(
+        "classify",
+        lambda s: s.get("route", "general_inquiry"),
+        {k: k for k in VALID_CATEGORIES},
     )
+    for k in VALID_CATEGORIES:
+        g.add_edge(k, END)
+    return g
 
+compiled_graph = _build_graph().compile()
 
-async def handle_inquiry(state: RouterState) -> dict:
-    return await _draft_reply(
-        state,
-        "You are a helpful customer service agent. Answer the customer's question "
-        "clearly and concisely. If you don't know the exact answer, offer to connect "
-        "them with the right team. Keep it under 100 words.",
-    )
+# ── Sample taxpayer emails ──────────────────────────────────────────
 
-
-async def handle_positive(state: RouterState) -> dict:
-    return await _draft_reply(
-        state,
-        "You are a warm customer service agent responding to positive feedback. "
-        "Thank them genuinely and mention you'll share with the team. Keep it under 80 words.",
-        temp=0.5,
-    )
-
-
-async def handle_tech_support(state: RouterState) -> dict:
-    return await _draft_reply(
-        state,
-        "You are a technical support engineer. Provide a clear, actionable answer "
-        "to the technical question. Include specific steps or documentation links "
-        "where helpful. Keep it under 150 words.",
-    )
-
-
-async def handle_billing(state: RouterState) -> dict:
-    return await _draft_reply(
-        state,
-        "You are a billing specialist. Address the billing concern professionally, "
-        "confirm you'll review the discrepancy, and provide next steps. "
-        "Keep it under 100 words.",
-    )
-
-
-# ── Build LangGraph workflow ──────────────────────────────────────
-
-graph = build_router(
-    router_fn=classify_email,
-    specialists={
-        "complaint": handle_complaint,
-        "inquiry": handle_inquiry,
-        "positive_feedback": handle_positive,
-        "technical_support": handle_tech_support,
-        "billing": handle_billing,
+SAMPLE_EMAILS = [
+    {
+        "id": "em-001",
+        "from": "john.tan@example.com",
+        "subject": "Request for Filing Extension — SG-T001-2890",
+        "body": (
+            "Dear Tax Authority,\n\n"
+            "I am writing to request a 30-day extension for my income tax filing "
+            "for YA 2024. My tax reference is SG-T001-2890. I have been on an "
+            "extended overseas work assignment and require additional time to "
+            "compile my supporting documents.\n\n"
+            "Please advise on the necessary steps and any forms I need to submit.\n\n"
+            "Thank you,\nJohn Tan Wei Ming"
+        ),
+        "status": "new", "category": None, "draft_reply": None, "policy_flags": [],
     },
-)
-compiled = graph.compile()
+    {
+        "id": "em-002",
+        "from": "priya.k@example.com",
+        "subject": "Payment Arrangement Amendment — TIN SG-T002-4471",
+        "body": (
+            "Good afternoon,\n\n"
+            "I currently have an active payment arrangement for my outstanding "
+            "balance of SGD 3,200 (YA 2024). My monthly instalment is SGD 400 "
+            "but due to recent medical expenses I am struggling. May I revise "
+            "the monthly payment down to SGD 200?\n\nMy TIN is SG-T002-4471.\n\n"
+            "Thank you,\nPriya Krishnan"
+        ),
+        "status": "new", "category": None, "draft_reply": None, "policy_flags": [],
+    },
+    {
+        "id": "em-003",
+        "from": "ahmad.r@gmail.com",
+        "subject": "Penalty Waiver Request — SG-T004-9934",
+        "body": (
+            "To Whom It May Concern,\n\n"
+            "I received two penalty notices for late filing. I was hospitalised "
+            "for three weeks in March 2025 which prevented me from filing on time. "
+            "I have since filed my return and paid the full outstanding tax "
+            "of SGD 4,200. My TIN is SG-T004-9934.\n\n"
+            "I am respectfully requesting a full waiver of the late-filing penalties.\n\n"
+            "Ahmad Bin Razali"
+        ),
+        "status": "new", "category": None, "draft_reply": None, "policy_flags": [],
+    },
+    {
+        "id": "em-004",
+        "from": "wml@enterprise.sg",
+        "subject": "Objection to Notice of Assessment — TIN SG-T005-1122",
+        "body": (
+            "Dear Sir/Madam,\n\n"
+            "I wish to formally object to my Notice of Assessment dated 15 February 2026. "
+            "The assessed income of SGD 198,000 includes a one-off gain from a property "
+            "disposal of SGD 42,000 which I believe is capital in nature and not subject "
+            "to income tax. My TIN is SG-T005-1122.\n\n"
+            "Please advise on the objection process and required supporting documents.\n\n"
+            "Wong Mei Lin"
+        ),
+        "status": "new", "category": None, "draft_reply": None, "policy_flags": [],
+    },
+    {
+        "id": "em-005",
+        "from": "fatimah.h@gmail.com",
+        "subject": "Query on CPF Relief Claim — SG-T008-5594",
+        "body": (
+            "Hi,\n\n"
+            "I would like to check if I can claim CPF cash top-up relief for "
+            "voluntary contributions made to my parents' CPF Retirement Accounts. "
+            "My TIN is SG-T008-5594.\n\n"
+            "Also, is the relief cap of SGD 7,000 applied per recipient or as a "
+            "combined total across all recipients?\n\nThank you,\nFatimah Hassan"
+        ),
+        "status": "new", "category": None, "draft_reply": None, "policy_flags": [],
+    },
+]
 
-# ── Pydantic models ───────────────────────────────────────────────
+emails_db: dict[str, dict] = {e["id"]: dict(e) for e in SAMPLE_EMAILS}
+processing_log: list[dict] = []
 
+# ── Pydantic models ─────────────────────────────────────────────────
 
 class EmailOut(BaseModel):
     id: str
-    sender: str  # renamed from 'from' for JSON
+    sender: str
     subject: str
     body: str
     status: str
     category: str | None
     draft_reply: str | None
-
+    policy_flags: list[str] = []
+    taxpayer_name: str | None = None
+    hitl_required: bool = False
 
 class ProcessResult(BaseModel):
     email_id: str
     category: str
     draft_reply: str
-    policy_warnings: list[str]
-    tokens_used: int
+    taxpayer_found: bool
+    taxpayer_id: str | None
+    policy_flags: list[str]
+    hitl_required: bool
+    trace_id: str
 
-
-# ── FastAPI app ───────────────────────────────────────────────────
-
-FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
-
+# ── FastAPI app ──────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    provider_name = type(llm).__name__
-    print(f"Email Assistant started — LLM: {provider_name}")
+    db_ok = False
+    try:
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            await conn.execute("SELECT 1")
+        db_ok = True
+    except Exception as exc:
+        logger.warning("PostgreSQL unavailable: %s", exc)
+    print(
+        f"Tax Email Assistant ready — LLM: {type(llm).__name__}, "
+        f"DB: {'connected' if db_ok else 'OFFLINE — taxpayer lookup disabled'}"
+    )
     yield
 
-
-app = FastAPI(title="Email Assistant", version="1.0.0", lifespan=lifespan)
-
+app = FastAPI(title="Tax Email Assistant", version="2.0.0", lifespan=lifespan)
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
 
+# ── Endpoints ────────────────────────────────────────────────────────
 
 @app.get("/api/emails")
 async def list_emails() -> list[EmailOut]:
@@ -307,113 +443,135 @@ async def list_emails() -> list[EmailOut]:
             status=e["status"],
             category=e["category"],
             draft_reply=e["draft_reply"],
+            policy_flags=e.get("policy_flags", []),
+            taxpayer_name=e.get("taxpayer_name"),
+            hitl_required=e.get("hitl_required", False),
         )
         for e in emails_db.values()
     ]
 
-
-@app.get("/api/emails/{email_id}")
-async def get_email(email_id: str) -> EmailOut:
-    e = emails_db.get(email_id)
-    if not e:
-        raise HTTPException(404, "Email not found")
-    return EmailOut(
-        id=e["id"],
-        sender=e["from"],
-        subject=e["subject"],
-        body=e["body"],
-        status=e["status"],
-        category=e["category"],
-        draft_reply=e["draft_reply"],
-    )
-
-
 @app.post("/api/emails/{email_id}/process")
 async def process_email(email_id: str) -> ProcessResult:
-    e = emails_db.get(email_id)
-    if not e:
-        raise HTTPException(404, "Email not found")
-    if e["status"] == "processed":
-        return ProcessResult(
-            email_id=email_id,
-            category=e["category"],
-            draft_reply=e["draft_reply"],
-            policy_warnings=[],
-            tokens_used=0,
-        )
+    email = emails_db.get(email_id)
+    if not email:
+        raise HTTPException(status_code=404, detail="Email not found")
 
-    e["status"] = "processing"
+    trace_id = str(uuid.uuid4())
+    full_text = f"From: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"
 
-    # Run the LangGraph workflow
-    result = await compiled.ainvoke({
-        "input": e["body"],
+    initial_state: TaxEmailState = {
+        "email_id": email_id,
+        "sender": email["from"],
+        "subject": email["subject"],
+        "input": full_text,
         "route": "",
         "messages": [],
         "output": "",
-    })
+        "taxpayer": None,
+        "trace_id": trace_id,
+        "policy_flags": [],
+        "hitl_required": False,
+    }
 
-    # Policy check on output
-    eval_result = await policy_engine.evaluate(
-        PolicyStage.POST_EXECUTION,
-        policies,
-        {"output": result["output"]},
-    )
-    warnings = [r.detail for r in eval_result.results if not r.passed and r.detail]
-    draft = eval_result.modified_data.get("output", result["output"])
+    result = await compiled_graph.ainvoke(initial_state)
 
-    e["category"] = result["route"]
-    e["draft_reply"] = draft
-    e["status"] = "processed"
+    # Guardrail policy pass
+    flags: list[str] = list(result.get("policy_flags", []))
+    try:
+        pr = await policy_engine.evaluate(
+            content=result["output"],
+            policy_set=policies,
+            stage="post_execution",
+        )
+        flags.extend(pr.get("warnings", []))
+    except Exception:
+        pass
 
-    log_entry = {
+    tp = result.get("taxpayer")
+    hitl = result.get("hitl_required", False)
+
+    email["status"] = "processed"
+    email["category"] = result["route"]
+    email["draft_reply"] = result["output"]
+    email["policy_flags"] = flags
+    email["hitl_required"] = hitl
+    if tp:
+        email["taxpayer_name"] = tp.get("full_name")
+
+    entry = {
+        "trace_id": trace_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "email_id": email_id,
         "category": result["route"],
-        "tokens": 0,
-        "policy_warnings": warnings,
+        "taxpayer_found": tp is not None,
+        "taxpayer_id": tp.get("tax_id") if tp else None,
+        "taxpayer_name": tp.get("full_name") if tp else None,
+        "policy_flags": flags,
+        "hitl_required": hitl,
+        "graph_nodes_visited": [m["role"] for m in result.get("messages", [])],
     }
-    processing_log.append(log_entry)
+    processing_log.append(entry)
+    logger.info(
+        "Processed %s → %s | taxpayer=%s | hitl=%s | trace=%s",
+        email_id, result["route"],
+        tp.get("tax_id") if tp else "NOT FOUND",
+        hitl, trace_id,
+    )
 
     return ProcessResult(
         email_id=email_id,
         category=result["route"],
-        draft_reply=draft,
-        policy_warnings=warnings,
-        tokens_used=0,
+        draft_reply=result["output"],
+        taxpayer_found=tp is not None,
+        taxpayer_id=tp.get("tax_id") if tp else None,
+        policy_flags=flags,
+        hitl_required=hitl,
+        trace_id=trace_id,
     )
 
-
 @app.post("/api/emails/process-all")
-async def process_all_emails() -> list[ProcessResult]:
-    results = []
-    for email_id in list(emails_db.keys()):
-        if emails_db[email_id]["status"] == "new":
-            r = await process_email(email_id)
-            results.append(r)
-    return results
-
+async def process_all():
+    import asyncio
+    ids = [e["id"] for e in emails_db.values() if e["status"] == "new"]
+    results = await asyncio.gather(*[process_email(eid) for eid in ids])
+    return {"processed": len(results), "results": [r.model_dump() for r in results]}
 
 @app.get("/api/stats")
-async def get_stats():
-    total = len(emails_db)
-    processed = sum(1 for e in emails_db.values() if e["status"] == "processed")
-    categories = {}
-    for e in emails_db.values():
-        if e["category"]:
-            categories[e["category"]] = categories.get(e["category"], 0) + 1
+async def stats():
+    processed = [e for e in emails_db.values() if e["status"] == "processed"]
+    by_cat: dict[str, int] = {}
+    for e in processed:
+        c = e.get("category") or "unknown"
+        by_cat[c] = by_cat.get(c, 0) + 1
     return {
-        "total_emails": total,
-        "processed": processed,
-        "pending": total - processed,
-        "categories": categories,
+        "total": len(emails_db),
+        "processed": len(processed),
+        "pending": len(emails_db) - len(processed),
+        "hitl_flagged": sum(1 for e in processed if e.get("hitl_required")),
+        "by_category": by_cat,
         "llm_provider": type(llm).__name__,
     }
 
+@app.get("/api/log")
+async def get_log():
+    """Full trace log — one entry per email processed, including graph nodes visited."""
+    return {"entries": processing_log}
 
-# Serve frontend
+@app.get("/api/taxpayer/{tax_id}")
+async def get_taxpayer(tax_id: str):
+    """Direct taxpayer record lookup."""
+    tp = await _db_lookup_taxpayer("", tax_id)
+    if not tp:
+        raise HTTPException(status_code=404, detail="Taxpayer not found")
+    return tp
+
 @app.get("/")
-async def serve_index():
+async def frontend():
     return FileResponse(FRONTEND_DIR / "index.html")
 
-
-if FRONTEND_DIR.exists():
-    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+@app.get("/{path:path}")
+async def static_fallback(path: str):
+    target = FRONTEND_DIR / path
+    if target.exists() and target.is_file():
+        return FileResponse(target)
+    raise HTTPException(status_code=404)

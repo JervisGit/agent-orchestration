@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Email Assistant — AO Demo</title>
+  <title>Tax Email Assistant — AO Demo</title>
   <style>
     :root {
       --bg: #0f172a;
@@ -218,11 +218,30 @@
       font-weight: 500;
     }
 
-    .cat-complaint { background: rgba(239, 68, 68, 0.15); color: var(--red); }
-    .cat-inquiry { background: rgba(59, 130, 246, 0.15); color: var(--accent); }
-    .cat-positive_feedback { background: rgba(34, 197, 94, 0.15); color: var(--green); }
-    .cat-technical_support { background: rgba(168, 85, 247, 0.15); color: var(--purple); }
-    .cat-billing { background: rgba(249, 115, 22, 0.15); color: var(--orange); }
+    .cat-filing_extension    { background: rgba(59,  130, 246, 0.15); color: var(--accent); }
+    .cat-payment_arrangement { background: rgba(249, 115,  22, 0.15); color: var(--orange); }
+    .cat-assessment_relief   { background: rgba(168,  85, 247, 0.15); color: var(--purple); }
+    .cat-penalty_waiver      { background: rgba(239,  68,  68, 0.15); color: var(--red); }
+    .cat-general_inquiry     { background: rgba(34,  197,  94, 0.15); color: var(--green); }
+    .hitl-banner {
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--red);
+      margin-bottom: 14px;
+    }
+    .taxpayer-banner {
+      background: rgba(59, 130, 246, 0.08);
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 12px;
+      color: var(--text2);
+      margin-bottom: 14px;
+    }
+    .taxpayer-banner strong { color: var(--accent); }
 
     .section {
       background: var(--surface);
@@ -304,7 +323,7 @@
 </head>
 <body>
   <header>
-    <h1>📨 <span>Email Assistant</span> — AO Demo</h1>
+    <h1>🏛️ <span>Tax Email Assistant</span> — AO Demo</h1>
     <span class="badge badge-provider" id="llm-badge">Loading...</span>
   </header>
 
@@ -312,6 +331,7 @@
     <div class="stat"><strong id="stat-total">0</strong> Total</div>
     <div class="stat"><strong id="stat-processed">0</strong> Processed</div>
     <div class="stat"><strong id="stat-pending">0</strong> Pending</div>
+    <div class="stat"><strong id="stat-hitl" style="color:var(--red)">0</strong> HITL Flagged</div>
   </div>
 
   <div class="actions-bar">
@@ -344,9 +364,10 @@
     async function loadStats() {
       try {
         const s = await fetchJSON('/stats');
-        document.getElementById('stat-total').textContent = s.total_emails;
+        document.getElementById('stat-total').textContent = s.total;
         document.getElementById('stat-processed').textContent = s.processed;
         document.getElementById('stat-pending').textContent = s.pending;
+        document.getElementById('stat-hitl').textContent = s.hitl_flagged ?? 0;
         document.getElementById('llm-badge').textContent = `LLM: ${s.llm_provider}`;
       } catch {}
     }
@@ -390,6 +411,8 @@
             ${e.category ? `<span class="category-badge cat-${e.category}">${formatCat(e.category)}</span>` : ''}
           </div>
         </div>
+        ${e.hitl_required ? `<div class="hitl-banner">⚠️ <strong>HITL Required</strong> — This case needs supervisor approval before proceeding.</div>` : ''}
+        ${e.taxpayer_name ? `<div class="taxpayer-banner">👤 Taxpayer matched: <strong>${esc(e.taxpayer_name)}</strong></div>` : (e.status === 'processed' ? '<div class="taxpayer-banner">⚠️ No taxpayer record matched — lookup by TIN or email returned no result.</div>' : '')}
 
         <div class="section">
           <div class="section-label">📩 Original Email</div>

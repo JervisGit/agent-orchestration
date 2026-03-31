@@ -14,13 +14,16 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
 
   langfuse:
-    image: langfuse/langfuse:latest
+    image: langfuse/langfuse:2
     environment:
-      DATABASE_URL: postgresql://ao:localdev@postgres:5432/ao
-      NEXTAUTH_SECRET: local-dev-secret
+      DATABASE_URL: postgresql://ao:localdev@postgres:5432/langfuse
+      NEXTAUTH_SECRET: local-dev-nextauth-secret
       NEXTAUTH_URL: http://localhost:3000
+      SALT: local-dev-salt-ao
+      TELEMETRY_ENABLED: "false"
     ports:
       - "3000:3000"
     depends_on:

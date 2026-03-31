@@ -17,6 +17,7 @@ Use **Langfuse** (self-hosted on AKS) for LLM-specific observability, combined w
 | LangSmith | Deep LangChain integration | Vendor-hosted (data leaves tenant), paid |
 | Phoenix / Arize | Good eval framework | Heavier, less focus on tracing |
 | Azure AI Foundry Tracing | Azure-native | Newer, less mature, limited trace visualization |
+| Pydantic Logfire | Production-grade, not just LLM but whole stack observability | Requires contract for enterprise (potential vendor lock-in) |
 
 ## Consequences
 - Need to deploy + maintain Langfuse on AKS
