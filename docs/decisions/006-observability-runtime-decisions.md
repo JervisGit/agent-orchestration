@@ -161,10 +161,48 @@ stream was mixed with stdout in the terminal and was easy to miss.
 
 ---
 
+---
+
+## Decision 6: Tracing strategy — explicit per-app vs config-driven
+
+### Current approach (explicit)
+Each app manually calls `lf_trace.span()` / `lf_trace.generation()` in its node
+functions. Metadata like `sop_applied: true` and taxpayer context are attached by hand.
+
+### Why config-driven is the right direction (but not yet)
+When there are many apps, every app team re-implementing the same span/generation
+boilerplate is wasteful and inconsistent. The better pattern:
+
+1. **Auto-tracing via callback** — Langfuse ships a `LangfuseCallbackHandler` for
+   LangGraph. Passing it to `compiled_graph.astream(..., config={"callbacks": [handler]})`
+   auto-traces every node entry/exit, latency, and token counts with ~5 lines of code.
+   This covers the structural tracing (what ran, how long, how many tokens).
+
+2. **Business metadata via manifest** — App-specific metadata (`sop_applied`, taxpayer
+   fields, category) should come from the manifest's `agents[].trace_metadata` config
+   rather than hardcoded Python. The AO engine then merges this into each span.
+
+### Why not now
+- Only one app exists today; the callback handler approach would save ~40 lines but
+  isn't blocking anything.
+- Manifest-driven trace metadata requires the config-driven agent architecture (ADR-007)
+  to be built first — the metadata has nowhere to live until agents are manifest-declared.
+- Effort: switching to the callback alone is low (~5 lines); the full manifest-driven
+  metadata approach depends on ADR-007 scope.
+
+### Recommendation
+When implementing ADR-007 (config-driven agents), add `trace_metadata` as a first-class
+field on `AgentConfig` and switch to `LangfuseCallbackHandler` for auto-tracing. Keep
+explicit `.generation()` calls only for cases where you need to override the default
+span structure.
+
+---
+
 ## Consequences
 
 - Langfuse v2 is a deliberate short-term choice; upgrade path to v3 is documented above.
 - SSE is production-ready as-is; no changes needed for HTTPS on ACA/AKS.
-- Structured logging and an `/healthz` endpoint are pre-production requirements.
-- Policies and SOPs are currently hardcoded — see ADR-007 (planned) for the agent
-  manifest / knowledge-base architecture decision.
+- Structured logging and a `/healthz` endpoint are pre-production requirements.
+- Policies, SOPs, and tracing metadata are currently hardcoded — addressed together in ADR-007.
+- Config-driven tracing via `LangfuseCallbackHandler` is low-effort but deferred until
+  ADR-007 defines the agent manifest structure.
