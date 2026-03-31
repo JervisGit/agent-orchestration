@@ -12,8 +12,8 @@
       --border: #475569;
       --text: #f1f5f9;
       --text2: #94a3b8;
-      --accent: #3b82f6;
-      --accent-hover: #2563eb;
+      --accent: #0078d4;
+      --accent-hover: #106ebe;
       --green: #22c55e;
       --yellow: #eab308;
       --red: #ef4444;
@@ -24,7 +24,7 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
@@ -52,7 +52,7 @@
     .badge {
       font-size: 11px;
       padding: 2px 8px;
-      border-radius: 9999px;
+      border-radius: 3px;
       font-weight: 500;
     }
 
@@ -93,7 +93,7 @@
       font-family: inherit;
       cursor: pointer;
       border: none;
-      border-radius: 8px;
+      border-radius: 3px;
       font-size: 13px;
       font-weight: 500;
       padding: 8px 16px;
@@ -157,10 +157,10 @@
     .email-status {
       font-size: 11px;
       padding: 2px 8px;
-      border-radius: 9999px;
+      border-radius: 3px;
     }
 
-    .status-new { background: rgba(59, 130, 246, 0.15); color: var(--accent); }
+    .status-new { background: rgba(0, 120, 212, 0.15); color: var(--accent); }
     .status-processing { background: rgba(234, 179, 8, 0.15); color: var(--yellow); }
     .status-processed { background: rgba(34, 197, 94, 0.15); color: var(--green); }
 
@@ -214,11 +214,11 @@
     .category-badge {
       font-size: 12px;
       padding: 3px 10px;
-      border-radius: 9999px;
+      border-radius: 3px;
       font-weight: 500;
     }
 
-    .cat-filing_extension    { background: rgba(59,  130, 246, 0.15); color: var(--accent); }
+    .cat-filing_extension    { background: rgba(0,  120, 212, 0.15); color: var(--accent); }
     .cat-payment_arrangement { background: rgba(249, 115,  22, 0.15); color: var(--orange); }
     .cat-assessment_relief   { background: rgba(168,  85, 247, 0.15); color: var(--purple); }
     .cat-penalty_waiver      { background: rgba(239,  68,  68, 0.15); color: var(--red); }
@@ -226,7 +226,7 @@
     .hitl-banner {
       background: rgba(239, 68, 68, 0.12);
       border: 1px solid rgba(239, 68, 68, 0.4);
-      border-radius: 8px;
+      border-radius: 4px;
       padding: 10px 14px;
       font-size: 13px;
       color: var(--red);
@@ -242,6 +242,7 @@
       color: var(--green);
       border: 1px solid rgba(34, 197, 94, 0.4);
       padding: 6px 14px;
+      border-radius: 3px;
     }
     .btn-approve:hover { background: rgba(34, 197, 94, 0.25); }
     .btn-reject {
@@ -249,12 +250,13 @@
       color: var(--red);
       border: 1px solid rgba(239, 68, 68, 0.3);
       padding: 6px 14px;
+      border-radius: 3px;
     }
     .btn-reject:hover { background: rgba(239, 68, 68, 0.2); }
     .workflow-summary {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 4px;
       margin-bottom: 16px;
       overflow: hidden;
     }
@@ -286,9 +288,9 @@
       border-top: 1px solid var(--border);
     }
     .taxpayer-banner {
-      background: rgba(59, 130, 246, 0.08);
-      border: 1px solid rgba(59, 130, 246, 0.25);
-      border-radius: 8px;
+      background: rgba(0, 120, 212, 0.08);
+      border: 1px solid rgba(0, 120, 212, 0.25);
+      border-radius: 4px;
       padding: 8px 14px;
       font-size: 12px;
       color: var(--text2);
@@ -299,7 +301,7 @@
     .section {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 4px;
       padding: 16px;
       margin-bottom: 16px;
     }
@@ -341,7 +343,7 @@
     .progress-panel {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 4px;
       padding: 16px;
       margin-bottom: 16px;
     }
@@ -368,13 +370,13 @@
       display: inline-block;
       margin-top: 8px;
       font-size: 11px;
-      color: var(--accent2);
+      color: var(--accent);
       text-decoration: none;
-      border: 1px solid rgba(129,140,248,0.3);
-      border-radius: 6px;
+      border: 1px solid rgba(0, 120, 212, 0.3);
+      border-radius: 3px;
       padding: 3px 10px;
     }
-    .langfuse-link:hover { background: rgba(129,140,248,0.1); }
+    .langfuse-link:hover { background: rgba(0, 120, 212, 0.1); }
 
     .spinner {
       display: inline-block;
@@ -398,7 +400,7 @@
       border: 1px solid var(--green);
       color: var(--text);
       padding: 12px 20px;
-      border-radius: 10px;
+      border-radius: 4px;
       font-size: 13px;
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
       transform: translateY(100px);
@@ -427,9 +429,9 @@
 
   <div class="actions-bar">
     <button class="btn-primary" id="btn-process-all" onclick="processAll()">
-      ⚡ Process All Emails
+      Process All Emails
     </button>
-    <button class="btn-secondary" onclick="refreshEmails()">↻ Refresh</button>
+    <button class="btn-secondary" onclick="refreshEmails()">Refresh</button>
   </div>
 
   <div class="container">
@@ -505,18 +507,18 @@
         </div>
         ${e.hitl_required ? `
           <div class="hitl-banner">
-            <div>⚠️ <strong>HITL Required</strong> — This case needs supervisor approval before proceeding.</div>
+            <div><strong>HITL Required</strong> — This case needs supervisor approval before proceeding.</div>
             ${e.hitl_request_id ? `
               <div class="hitl-actions">
-                <button class="btn-approve" onclick="approveHITL('${e.hitl_request_id}')">✔ Approve Action</button>
-                <button class="btn-reject" onclick="rejectHITL('${e.hitl_request_id}')">✕ Reject</button>
+                <button class="btn-approve" onclick="approveHITL('${e.hitl_request_id}')">Approve Action</button>
+                <button class="btn-reject" onclick="rejectHITL('${e.hitl_request_id}')">Reject</button>
               </div>
             ` : ''}
           </div>` : ''}
-        ${e.taxpayer_name ? `<div class="taxpayer-banner">👤 Taxpayer matched: <strong>${esc(e.taxpayer_name)}</strong></div>` : (e.status === 'processed' ? '<div class="taxpayer-banner">⚠️ No taxpayer record matched — lookup by TIN or email returned no result.</div>' : '')}
+        ${e.taxpayer_name ? `<div class="taxpayer-banner">Taxpayer matched: <strong>${esc(e.taxpayer_name)}</strong></div>` : (e.status === 'processed' ? '<div class="taxpayer-banner">No taxpayer record matched — lookup by TIN or email returned no result.</div>' : '')}
 
         <div class="section">
-          <div class="section-label">📩 Original Email</div>
+          <div class="section-label">Original Email</div>
           <div class="section-body">${esc(e.body)}</div>
         </div>
       `;
@@ -524,7 +526,7 @@
       if (e.status === 'processing') {
         html += `
           <div class="progress-panel" id="progress-${e.id}">
-            <div class="progress-panel-label">⚙️ Agent Workflow Progress</div>
+            <div class="progress-panel-label">Agent Workflow Progress</div>
             <div class="progress-step step-processing">
               <span class="step-icon"><span class="spinner"></span></span>
               <div class="step-label" style="color:var(--text2)">Initializing...</div>
@@ -551,13 +553,13 @@
               det = `<div class="step-detail">→ merged ${d.merged_from.length} responses</div>`;
             return `
               <div class="progress-step">
-                <span class="step-icon" style="color:var(--green)">✓</span>
+                <span class="step-icon" style="color:var(--green)">&#x25AA;</span>
                 <div><div class="step-label">${esc(s.label)}</div>${det}</div>
               </div>`;
           }).join('');
           html += `
             <details class="workflow-summary">
-              <summary>⚙️ Agent Workflow — ${wfSteps.length} steps</summary>
+              <summary>Agent Workflow — ${wfSteps.length} steps</summary>
               <div class="progress-panel">${stepRows}</div>
             </details>
           `;
@@ -567,7 +569,7 @@
       if (e.draft_reply) {
         html += `
           <div class="section reply-section">
-            <div class="section-label">✉️ AI Draft Reply</div>
+            <div class="section-label">AI Draft Reply</div>
             <div class="section-body">${esc(e.draft_reply)}</div>
           </div>
         `;
@@ -577,7 +579,7 @@
         html += `
           <div class="process-btn-inline">
             <button class="btn-primary" onclick="processOne('${e.id}')">
-              ⚡ Process This Email
+              Process This Email
             </button>
           </div>
         `;
@@ -622,14 +624,14 @@
             const el = document.createElement('div');
             el.className = 'progress-step';
             el.innerHTML = `
-              <span class="step-icon" style="color:var(--green)">✓</span>
+              <span class="step-icon" style="color:var(--green)">&#x25AA;</span>
               <div><div class="step-label">${esc(data.label)}</div>${detailHtml}</div>
             `;
             panel.appendChild(el);
             if (data.node !== 'policy_check') {
               const spin = document.createElement('div');
               spin.className = 'progress-step step-processing';
-              spin.innerHTML = `<span class="step-icon"><span class="spinner"></span></span><div class="step-label" style="color:var(--text2)">Waiting for next step...</div>`;
+              spin.innerHTML = `<span class="step-icon"><span class="spinner"></span></span><div class="step-label" style="color:var(--text2)">Processing...</div>`;
               panel.appendChild(spin);
             }
           }
@@ -649,13 +651,13 @@
           setTimeout(() => {
             refreshEmails().then(() => {
               showDetail(id);
-              showToast(`Classified as "${formatCat(r.category)}" ✓`);
+              showToast(`Classified as "${formatCat(r.category)}"`);
               if (r.langfuse_url) {
                 const detail = document.getElementById('email-detail');
                 const lf = document.createElement('a');
                 lf.href = r.langfuse_url; lf.target = '_blank';
                 lf.className = 'langfuse-link';
-                lf.textContent = '🔍 View trace in Langfuse';
+                lf.textContent = 'View trace in Langfuse';
                 detail.querySelector('.reply-section')?.after(lf);
               }
             });
@@ -667,7 +669,7 @@
           if (panel) {
             const el = document.createElement('div');
             el.className = 'progress-step';
-            el.innerHTML = `<span class="step-icon" style="color:var(--red)">✗</span><div class="step-label" style="color:var(--red)">${esc(data.message)}</div>`;
+            el.innerHTML = `<span class="step-icon" style="color:var(--red)">&#x25AA;</span><div class="step-label" style="color:var(--red)">${esc(data.message)}</div>`;
             panel.appendChild(el);
           }
           const e = emails.find(x => x.id === id);
@@ -690,16 +692,15 @@
       const btn = document.getElementById('btn-process-all');
       btn.disabled = true;
       btn.innerHTML = '<span class="spinner"></span>Processing...';
-
-      try {
+  try {
         const results = await fetchJSON('/emails/process-all', { method: 'POST' });
-        showToast(`Processed ${results.length} emails ✓`);
+        showToast(`Processed ${results.length} emails`);
       } catch (err) {
         showToast(`Error: ${err.message}`, true);
       }
 
       btn.disabled = false;
-      btn.innerHTML = '⚡ Process All Emails';
+      btn.innerHTML = 'Process All Emails';
       await refreshEmails();
     }
 
@@ -728,7 +729,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ approved: true, reviewer: 'dashboard-user' }),
         });
-        showToast('Action approved and executed ✓');
+        showToast('Action approved and executed');
         await refreshEmails();
       } catch (err) {
         showToast(`Approve failed: ${err.message}`, true);

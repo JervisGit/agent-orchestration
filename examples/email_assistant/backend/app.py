@@ -719,12 +719,13 @@ async def execute_hitl_action(request_id: str, body: HITLResolve):
 
             status = "approved" if body.approved else "rejected"
 
-            if body.approved:
-                payload = req["payload"] if isinstance(req["payload"], dict) else json.loads(req["payload"])
-                tax_id = payload.get("taxpayer_tax_id")
-                action_text = payload.get("proposed_action", "HITL action approved")
-                email_id = payload.get("email_id")
+            payload = req["payload"] if isinstance(req["payload"], dict) else json.loads(req["payload"])
+            email_id = payload.get("email_id")
+            tax_id = payload.get("taxpayer_tax_id")
+            action_text = payload.get("proposed_action", "HITL action approved")
+            trace_id = payload.get("trace_id")
 
+            if body.approved:
                 if tax_id:
                     note_text = (
                         f"[{now.strftime('%Y-%m-%d')}] Penalty waiver APPROVED by {body.reviewer}. "
@@ -736,9 +737,29 @@ async def execute_hitl_action(request_id: str, body: HITLResolve):
                     )
                     logger.info("HITL approved: updated taxpayer notes for %s", tax_id)
 
-                if email_id and email_id in emails_db:
-                    emails_db[email_id]["status"] = "hitl_approved"
-                    emails_db[email_id]["hitl_resolved"] = True
+            # Clear the HITL flag in memory so the banner disappears on next list refresh
+            if email_id and email_id in emails_db:
+                emails_db[email_id]["hitl_required"] = False
+                emails_db[email_id]["hitl_resolved"] = True
+                emails_db[email_id]["status"] = "hitl_approved" if body.approved else "hitl_rejected"
+
+            # Append a resolution event to the originating Langfuse trace
+            if langfuse_client and trace_id:
+                try:
+                    lf_trace = langfuse_client.trace(id=trace_id)
+                    lf_trace.event(
+                        name=f"hitl_{status}",
+                        metadata={
+                            "reviewer": body.reviewer,
+                            "action": action_text,
+                            "tax_id": tax_id,
+                            "note": body.note,
+                            "resolved_at": now.isoformat(),
+                        },
+                    )
+                    langfuse_client.flush()
+                except Exception:
+                    pass
 
             # Mark request resolved
             await conn.execute(
