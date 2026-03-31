@@ -28,7 +28,7 @@ resource "azurerm_cognitive_deployment" "gpt4o" {
 
   sku {
     name     = "Standard"
-    capacity = var.environment == "prod" ? 30 : 10
+    capacity = 10
   }
 }
 
@@ -45,7 +45,7 @@ resource "azurerm_cognitive_deployment" "gpt4o_mini" {
 
   sku {
     name     = "Standard"
-    capacity = var.environment == "prod" ? 60 : 20
+    capacity = 20
   }
 }
 
@@ -62,7 +62,7 @@ resource "azurerm_cognitive_deployment" "embedding" {
 
   sku {
     name     = "Standard"
-    capacity = var.environment == "prod" ? 50 : 20
+    capacity = 20
   }
 }
 

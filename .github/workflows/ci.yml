@@ -173,48 +173,4 @@ jobs:
           kubectl set image deployment/ao-worker ao-worker=${{ env.REGISTRY }}/ao-worker:${{ github.sha }} -n ao-dev
           kubectl rollout status deployment/ao-api -n ao-dev --timeout=300s
 
-  # ── Deploy to Staging (AKS) ─────────────────────────────────────
-  deploy-staging:
-    runs-on: ubuntu-latest
-    needs: deploy-dev
-    if: github.ref == 'refs/heads/main'
-    environment: staging
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: Deploy to staging AKS
-        run: |
-          az aks get-credentials --resource-group rg-ao-staging --name aks-dsai-staging
-          kubectl set image deployment/ao-api ao-api=${{ env.REGISTRY }}/ao-api:${{ github.sha }} -n ao-staging
-          kubectl set image deployment/ao-worker ao-worker=${{ env.REGISTRY }}/ao-worker:${{ github.sha }} -n ao-staging
-          kubectl rollout status deployment/ao-api -n ao-staging --timeout=300s
 
-  # ── Deploy to Production (AKS, manual gate) ─────────────────────
-  deploy-prod:
-    runs-on: ubuntu-latest
-    needs: deploy-staging
-    if: github.ref == 'refs/heads/main'
-    environment: production
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: Deploy to production AKS
-        run: |
-          az aks get-credentials --resource-group rg-ao-prod --name aks-dsai-prod
-          kubectl set image deployment/ao-api ao-api=${{ env.REGISTRY }}/ao-api:${{ github.sha }} -n ao-prod
-          kubectl set image deployment/ao-worker ao-worker=${{ env.REGISTRY }}/ao-worker:${{ github.sha }} -n ao-prod
-          kubectl rollout status deployment/ao-api -n ao-prod --timeout=300s

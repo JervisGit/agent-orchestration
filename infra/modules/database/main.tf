@@ -19,10 +19,10 @@ resource "azurerm_postgresql_flexible_server" "ao" {
   version                      = "16"
   administrator_login          = "aoadmin"
   administrator_password       = var.admin_password
-  storage_mb                   = var.environment == "prod" ? 65536 : 32768
-  sku_name                     = var.environment == "prod" ? "GP_Standard_D2s_v3" : "B_Standard_B1ms"
-  backup_retention_days        = var.environment == "prod" ? 35 : 7
-  geo_redundant_backup_enabled = var.environment == "prod"
+  storage_mb                   = 32768
+  sku_name                     = "B_Standard_B1ms"
+  backup_retention_days        = 7
+  geo_redundant_backup_enabled = false
 
   tags = var.tags
 }
@@ -54,9 +54,9 @@ resource "azurerm_redis_cache" "ao" {
   name                 = "redis-ao-${var.environment}"
   location             = var.location
   resource_group_name  = var.resource_group_name
-  capacity             = var.environment == "prod" ? 1 : 0
+  capacity             = 0
   family               = "C"
-  sku_name             = var.environment == "prod" ? "Standard" : "Basic"
+  sku_name             = "Basic"
   minimum_tls_version  = "1.2"
   non_ssl_port_enabled = false
 

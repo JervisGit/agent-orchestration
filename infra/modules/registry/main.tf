@@ -9,7 +9,7 @@ resource "azurerm_container_registry" "ao" {
   name                = "crao${var.environment}"
   resource_group_name = var.resource_group_name
   location            = var.location
-  sku                 = var.environment == "prod" ? "Premium" : "Basic"
+  sku                 = "Basic"
   admin_enabled       = false
 
   tags = var.tags

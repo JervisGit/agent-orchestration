@@ -36,7 +36,7 @@ ao-platform/                    # Hosted services
 
 infra/                          # Terraform
   modules/                      # aca/, aks/, database/, messaging/, observability/, security/, ai/, registry/
-  environments/                 # dev.tfvars, staging.tfvars, prod.tfvars
+  environments/                 # dev.tfvars
   main.tf
 
 tests/
@@ -57,7 +57,7 @@ docker/
   docker-compose.local.yml      # Local dev environment
 ```
 
-**Production**: each DSAI app lives in its own repo and imports `ao-core` as a package.
+**Deployed**: each DSAI app lives in its own repo and imports `ao-core` as a package.
 
 ---
 
@@ -124,7 +124,7 @@ policies:
 - Per-step config: `required | optional | auto`
 - Notification channels: WebSocket (dashboard), webhook, email
 - Timeout + fallback: no human response in X minutes → escalate / fallback action
-- Toggle on/off per environment (auto-approve in dev, require in prod)
+- Toggle on/off per environment (auto-approve in dev)
 
 ### Resilience
 
@@ -208,7 +208,7 @@ Traditional monitoring (Azure Monitor) is insufficient for LLM apps — you need
 
 Decision tracked in **ADR-004**.
 
-**CI pipeline**: lint → unit → integration → eval (DeepEval) → security scan → build → deploy staging
+**CI pipeline**: lint → unit → integration → eval (DeepEval) → security scan → build → deploy dev
 
 ---
 
@@ -260,7 +260,7 @@ Decision tracked in **ADR-004**.
 ## Scope
 
 - **In**: AO SDK, platform API, dashboard, infra, DSAI app demos
-- **Out**: Individual DSAI app business logic (own repos in prod), ML training, data pipelines
+- **Out**: Individual DSAI app business logic (own repos when deployed), ML training, data pipelines
 
 ---
 

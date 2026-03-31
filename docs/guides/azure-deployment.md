@@ -3,7 +3,7 @@
 How to deploy AO and DSAI apps to Azure infrastructure. Supports two compute modes:
 
 - **ACA (default)** — Azure Container Apps, serverless, scales to zero. Best for dev/trial.
-- **AKS (toggle)** — Azure Kubernetes Service. Best for company clusters in staging/prod.
+- **AKS (toggle)** — Azure Kubernetes Service. Best for company clusters.
 
 Switch between them with a single variable: `compute_platform = "aca"` or `"aks"` in your `.tfvars` file. See [ADR-005](../decisions/005-compute-platform.md) for the rationale.
 

@@ -2,7 +2,8 @@
 
 variable "environment" {
   type        = string
-  description = "Deployment environment (dev, staging, prod)"
+  description = "Deployment environment"
+  default     = "dev"
 }
 
 variable "subscription_id" {

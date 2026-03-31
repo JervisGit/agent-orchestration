@@ -16,7 +16,7 @@ resource "azurerm_key_vault" "ao" {
   tenant_id           = data.azurerm_client_config.current.tenant_id
   sku_name            = "standard"
 
-  purge_protection_enabled   = var.environment == "prod"
+  purge_protection_enabled   = false
   soft_delete_retention_days = 30
 
   tags = var.tags

@@ -9,7 +9,7 @@ resource "azurerm_servicebus_namespace" "ao" {
   name                = "sb-ao-${var.environment}"
   location            = var.location
   resource_group_name = var.resource_group_name
-  sku                 = var.environment == "prod" ? "Standard" : "Basic"
+  sku                 = "Basic"
 
   tags = var.tags
 }
