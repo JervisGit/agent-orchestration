@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AO Dashboard — Agent Orchestration</title>
+  <style>
+    :root {
+      --bg: #09090b;
+      --surface: #18181b;
+      --surface2: #27272a;
+      --border: #3f3f46;
+      --text: #fafafa;
+      --text2: #a1a1aa;
+      --accent: #6366f1;
+      --accent2: #818cf8;
+      --green: #22c55e;
+      --yellow: #eab308;
+      --red: #ef4444;
+      --blue: #3b82f6;
+      --purple: #a855f7;
+      --orange: #f97316;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* Layout */
+    .app { display: flex; min-height: 100vh; }
+    .sidebar {
+      width: 240px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 20px 0;
+      flex-shrink: 0;
+    }
+    .sidebar-brand {
+      padding: 0 20px 20px;
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--accent2);
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+    .sidebar-brand small {
+      display: block;
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--text2);
+      margin-top: 2px;
+    }
+    .nav-item {
+      padding: 10px 20px;
+      font-size: 14px;
+      cursor: pointer;
+      color: var(--text2);
+      transition: all 0.1s;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .nav-item:hover { color: var(--text); background: var(--surface2); }
+    .nav-item.active { color: var(--accent2); background: rgba(99,102,241,0.1); border-right: 2px solid var(--accent); }
+
+    .main { flex: 1; padding: 28px 32px; overflow-y: auto; }
+
+    /* Page header */
+    .page-header { margin-bottom: 24px; }
+    .page-title { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
+    .page-subtitle { font-size: 13px; color: var(--text2); }
+
+    /* Cards */
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; margin-bottom: 28px; }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+    }
+    .stat-card-label { font-size: 12px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+    .stat-card-value { font-size: 28px; font-weight: 700; }
+    .stat-card-value.green { color: var(--green); }
+    .stat-card-value.blue { color: var(--blue); }
+    .stat-card-value.yellow { color: var(--yellow); }
+    .stat-card-value.purple { color: var(--purple); }
+
+    /* Tables */
+    .table-container {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .table-header {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .table-header h3 { font-size: 15px; font-weight: 600; }
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text2);
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: 12px 18px;
+      font-size: 13px;
+      border-bottom: 1px solid var(--border);
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover { background: var(--surface2); }
+
+    /* Badges */
+    .badge {
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 9999px;
+      font-weight: 500;
+      display: inline-block;
+    }
+    .badge-green { background: rgba(34,197,94,0.15); color: var(--green); }
+    .badge-blue { background: rgba(59,130,246,0.15); color: var(--blue); }
+    .badge-yellow { background: rgba(234,179,8,0.15); color: var(--yellow); }
+    .badge-red { background: rgba(239,68,68,0.15); color: var(--red); }
+    .badge-purple { background: rgba(168,85,247,0.15); color: var(--purple); }
+    .badge-neutral { background: var(--surface2); color: var(--text2); }
+
+    /* Buttons */
+    button {
+      font-family: inherit;
+      cursor: pointer;
+      border: none;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 6px 14px;
+      transition: all 0.15s;
+    }
+    .btn-sm { font-size: 11px; padding: 4px 10px; }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover { background: #4f46e5; }
+    .btn-green { background: rgba(34,197,94,0.15); color: var(--green); border: 1px solid rgba(34,197,94,0.3); }
+    .btn-green:hover { background: rgba(34,197,94,0.25); }
+    .btn-red { background: rgba(239,68,68,0.15); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
+    .btn-red:hover { background: rgba(239,68,68,0.25); }
+    .btn-outline { background: transparent; color: var(--text2); border: 1px solid var(--border); }
+    .btn-outline:hover { color: var(--text); border-color: var(--text2); }
+
+    /* Modal */
+    .modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 100;
+    }
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      width: 440px;
+      max-width: 90vw;
+    }
+    .modal h3 { font-size: 17px; margin-bottom: 16px; }
+    .form-group { margin-bottom: 14px; }
+    .form-group label { display: block; font-size: 12px; color: var(--text2); margin-bottom: 4px; }
+    .form-group input, .form-group select {
+      width: 100%;
+      padding: 8px 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 48px;
+      color: var(--text2);
+      font-size: 14px;
+    }
+
+    .hidden { display: none; }
+
+    /* DSAI App tiles */
+    .app-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-bottom: 28px; }
+    .app-tile {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .app-tile:hover { border-color: var(--accent); }
+    .app-tile h4 { font-size: 15px; margin-bottom: 4px; }
+    .app-tile p { font-size: 12px; color: var(--text2); margin-bottom: 12px; }
+    .app-tile-meta { display: flex; gap: 8px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="sidebar">
+      <div class="sidebar-brand">
+        AO Dashboard
+        <small>Agent Orchestration Platform</small>
+      </div>
+      <div class="nav-item active" data-page="overview" onclick="showPage('overview')">📊 Overview</div>
+      <div class="nav-item" data-page="workflows" onclick="showPage('workflows')">🔄 Workflows</div>
+      <div class="nav-item" data-page="hitl" onclick="showPage('hitl')">✋ HITL Approvals</div>
+      <div class="nav-item" data-page="policies" onclick="showPage('policies')">🛡️ Policies</div>
+      <div class="nav-item" data-page="apps" onclick="showPage('apps')">📦 DSAI Apps</div>
+    </div>
+
+    <div class="main">
+      <!-- OVERVIEW -->
+      <div id="page-overview">
+        <div class="page-header">
+          <div class="page-title">Dashboard</div>
+          <div class="page-subtitle">Agent Orchestration platform overview</div>
+        </div>
+        <div class="card-grid">
+          <div class="stat-card">
+            <div class="stat-card-label">Registered Workflows</div>
+            <div class="stat-card-value blue" id="ov-workflows">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">Total Runs</div>
+            <div class="stat-card-value green" id="ov-runs">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">Pending Approvals</div>
+            <div class="stat-card-value yellow" id="ov-hitl">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">Active Policies</div>
+            <div class="stat-card-value purple" id="ov-policies">0</div>
+          </div>
+        </div>
+
+        <div class="table-container">
+          <div class="table-header">
+            <h3>Recent Workflow Runs</h3>
+          </div>
+          <div id="ov-recent-runs">
+            <div class="empty-state">No workflow runs yet. Register a workflow to get started.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- WORKFLOWS -->
+      <div id="page-workflows" class="hidden">
+        <div class="page-header">
+          <div class="page-title">Workflows</div>
+          <div class="page-subtitle">Registered agent workflow configurations</div>
+        </div>
+        <div style="margin-bottom: 16px;">
+          <button class="btn-primary" onclick="showCreateWorkflow()">+ New Workflow</button>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead><tr><th>ID</th><th>App</th><th>Pattern</th><th>Description</th><th>Runs</th><th></th></tr></thead>
+            <tbody id="wf-table-body"></tbody>
+          </table>
+          <div id="wf-empty" class="empty-state">No workflows registered.</div>
+        </div>
+      </div>
+
+      <!-- HITL -->
+      <div id="page-hitl" class="hidden">
+        <div class="page-header">
+          <div class="page-title">HITL Approvals</div>
+          <div class="page-subtitle">Human-in-the-loop approval queue</div>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead><tr><th>Request ID</th><th>Workflow</th><th>Step</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody id="hitl-table-body"></tbody>
+          </table>
+          <div id="hitl-empty" class="empty-state">No pending approvals. Workflows are running autonomously.</div>
+        </div>
+      </div>
+
+      <!-- POLICIES -->
+      <div id="page-policies" class="hidden">
+        <div class="page-header">
+          <div class="page-title">Policies</div>
+          <div class="page-subtitle">Guardrail policies for DSAI applications</div>
+        </div>
+        <div style="margin-bottom: 16px;">
+          <button class="btn-primary" onclick="showCreatePolicy()">+ New Policy</button>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead><tr><th>App</th><th>Name</th><th>Stage</th><th>Action</th><th></th></tr></thead>
+            <tbody id="pol-table-body"></tbody>
+          </table>
+          <div id="pol-empty" class="empty-state">No policies configured.</div>
+        </div>
+      </div>
+
+      <!-- DSAI APPS -->
+      <div id="page-apps" class="hidden">
+        <div class="page-header">
+          <div class="page-title">DSAI Applications</div>
+          <div class="page-subtitle">Apps using the Agent Orchestration layer</div>
+        </div>
+        <div class="app-tiles">
+          <div class="app-tile" onclick="window.open('/email-assistant/', '_blank')">
+            <h4>📨 Email Assistant</h4>
+            <p>Classifies inbound emails, routes to specialist agents, drafts replies with policy enforcement.</p>
+            <div class="app-tile-meta">
+              <span class="badge badge-green">Running</span>
+              <span class="badge badge-neutral">Router Pattern</span>
+              <span class="badge badge-blue">5 categories</span>
+            </div>
+          </div>
+          <div class="app-tile">
+            <h4>🔍 RAG Search</h4>
+            <p>Retrieval-augmented search over company documents with pgvector embeddings.</p>
+            <div class="app-tile-meta">
+              <span class="badge badge-yellow">Coming Soon</span>
+              <span class="badge badge-neutral">Linear Pattern</span>
+            </div>
+          </div>
+          <div class="app-tile">
+            <h4>📋 Graph Compliance</h4>
+            <p>Multi-agent compliance checks using Microsoft Graph API with user-delegated identity.</p>
+            <div class="app-tile-meta">
+              <span class="badge badge-yellow">Coming Soon</span>
+              <span class="badge badge-neutral">Supervisor Pattern</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Workflow Modal -->
+  <div class="modal-overlay hidden" id="modal-workflow">
+    <div class="modal">
+      <h3>Register New Workflow</h3>
+      <div class="form-group">
+        <label>Workflow ID</label>
+        <input id="wf-id" placeholder="e.g. email-classifier-v1">
+      </div>
+      <div class="form-group">
+        <label>App ID</label>
+        <input id="wf-app" placeholder="e.g. email_assistant">
+      </div>
+      <div class="form-group">
+        <label>Pattern</label>
+        <select id="wf-pattern">
+          <option value="linear">Linear Chain</option>
+          <option value="router">Router</option>
+          <option value="supervisor">Supervisor Multi-Agent</option>
+          <option value="planner">Plan and Execute</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <input id="wf-desc" placeholder="What does this workflow do?">
+      </div>
+      <div class="form-actions">
+        <button class="btn-outline" onclick="closeModal('modal-workflow')">Cancel</button>
+        <button class="btn-primary" onclick="createWorkflow()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Policy Modal -->
+  <div class="modal-overlay hidden" id="modal-policy">
+    <div class="modal">
+      <h3>Add Policy</h3>
+      <div class="form-group">
+        <label>App ID</label>
+        <input id="pol-app" placeholder="e.g. email_assistant">
+      </div>
+      <div class="form-group">
+        <label>Policy Name</label>
+        <input id="pol-name" placeholder="e.g. pii_filter">
+      </div>
+      <div class="form-group">
+        <label>Stage</label>
+        <select id="pol-stage">
+          <option value="pre_execution">Pre-execution</option>
+          <option value="post_execution">Post-execution</option>
+          <option value="runtime">Runtime</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Action</label>
+        <select id="pol-action">
+          <option value="block">Block</option>
+          <option value="redact">Redact</option>
+          <option value="warn">Warn</option>
+          <option value="log">Log</option>
+        </select>
+      </div>
+      <div class="form-actions">
+        <button class="btn-outline" onclick="closeModal('modal-policy')">Cancel</button>
+        <button class="btn-primary" onclick="createPolicy()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = '/api';
+
+    // ── Navigation ─────────────────────────────────────────
+    function showPage(page) {
+      document.querySelectorAll('.main > div[id^="page-"]').forEach(el => el.classList.add('hidden'));
+      document.getElementById(`page-${page}`).classList.remove('hidden');
+      document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+      document.querySelector(`.nav-item[data-page="${page}"]`).classList.add('active');
+      if (page === 'overview') loadOverview();
+      if (page === 'workflows') loadWorkflows();
+      if (page === 'hitl') loadHITL();
+      if (page === 'policies') loadPolicies();
+    }
+
+    // ── API helpers ────────────────────────────────────────
+    async function api(path, opts = {}) {
+      try {
+        const resp = await fetch(API + path, {
+          headers: { 'Content-Type': 'application/json' },
+          ...opts,
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return resp.json();
+      } catch (e) {
+        console.warn('API error:', e);
+        return null;
+      }
+    }
+
+    // ── Overview ───────────────────────────────────────────
+    async function loadOverview() {
+      const [wfData, hitlData, polData] = await Promise.all([
+        api('/workflows/'),
+        api('/hitl/pending'),
+        api('/policies/'),
+      ]);
+      document.getElementById('ov-workflows').textContent = wfData?.workflows?.length ?? 0;
+      document.getElementById('ov-hitl').textContent = hitlData?.pending?.length ?? 0;
+      document.getElementById('ov-policies').textContent = polData?.policies?.length ?? 0;
+
+      let totalRuns = 0;
+      const runs = [];
+      if (wfData?.workflows) {
+        for (const wf of wfData.workflows) {
+          const rd = await api(`/workflows/${wf.workflow_id}/runs`);
+          if (rd?.runs) {
+            totalRuns += rd.runs.length;
+            runs.push(...rd.runs.map(r => ({ ...r, app_id: wf.app_id })));
+          }
+        }
+      }
+      document.getElementById('ov-runs').textContent = totalRuns;
+
+      const container = document.getElementById('ov-recent-runs');
+      if (runs.length === 0) {
+        container.innerHTML = '<div class="empty-state">No workflow runs yet.</div>';
+      } else {
+        container.innerHTML = `<table><thead><tr><th>Run ID</th><th>Workflow</th><th>Status</th></tr></thead><tbody>
+          ${runs.slice(-10).reverse().map(r => `<tr>
+            <td style="font-family:monospace;font-size:12px">${esc(r.run_id?.slice(0,8))}...</td>
+            <td>${esc(r.workflow_id)}</td>
+            <td><span class="badge badge-${r.status==='completed'?'green':r.status==='failed'?'red':'yellow'}">${r.status}</span></td>
+          </tr>`).join('')}
+        </tbody></table>`;
+      }
+    }
+
+    // ── Workflows ──────────────────────────────────────────
+    async function loadWorkflows() {
+      const data = await api('/workflows/');
+      const wfs = data?.workflows ?? [];
+      const tbody = document.getElementById('wf-table-body');
+      const empty = document.getElementById('wf-empty');
+      if (wfs.length === 0) {
+        tbody.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+      const patternBadge = p => ({
+        linear: 'badge-blue', router: 'badge-green', supervisor: 'badge-purple', planner: 'badge-yellow',
+      })[p] || 'badge-neutral';
+      tbody.innerHTML = wfs.map(w => `<tr>
+        <td style="font-weight:600">${esc(w.workflow_id)}</td>
+        <td>${esc(w.app_id)}</td>
+        <td><span class="badge ${patternBadge(w.pattern)}">${w.pattern}</span></td>
+        <td style="color:var(--text2)">${esc(w.description || '—')}</td>
+        <td>—</td>
+        <td><button class="btn-sm btn-primary" onclick="triggerRun('${esc(w.workflow_id)}')">▶ Run</button></td>
+      </tr>`).join('');
+    }
+
+    function showCreateWorkflow() { document.getElementById('modal-workflow').classList.remove('hidden'); }
+
+    async function createWorkflow() {
+      await api('/workflows/', {
+        method: 'POST',
+        body: JSON.stringify({
+          workflow_id: document.getElementById('wf-id').value,
+          app_id: document.getElementById('wf-app').value,
+          pattern: document.getElementById('wf-pattern').value,
+          description: document.getElementById('wf-desc').value,
+        }),
+      });
+      closeModal('modal-workflow');
+      loadWorkflows();
+    }
+
+    async function triggerRun(workflowId) {
+      await api(`/workflows/${workflowId}/run`, {
+        method: 'POST',
+        body: JSON.stringify({ input_data: {}, hitl_enabled: false }),
+      });
+      loadWorkflows();
+    }
+
+    // ── HITL ───────────────────────────────────────────────
+    async function loadHITL() {
+      const data = await api('/hitl/pending');
+      const items = data?.pending ?? [];
+      const tbody = document.getElementById('hitl-table-body');
+      const empty = document.getElementById('hitl-empty');
+      if (items.length === 0) {
+        tbody.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+      tbody.innerHTML = items.map(h => `<tr>
+        <td style="font-family:monospace;font-size:12px">${esc(h.request_id?.slice(0,8) ?? '?')}...</td>
+        <td>${esc(h.workflow_id ?? '—')}</td>
+        <td>${esc(h.step_name ?? '—')}</td>
+        <td><span class="badge badge-yellow">pending</span></td>
+        <td>
+          <button class="btn-sm btn-green" onclick="resolveHITL('${h.request_id}',true)">✓ Approve</button>
+          <button class="btn-sm btn-red" onclick="resolveHITL('${h.request_id}',false)">✕ Reject</button>
+        </td>
+      </tr>`).join('');
+    }
+
+    async function resolveHITL(id, approved) {
+      await api(`/hitl/${id}/resolve`, {
+        method: 'POST',
+        body: JSON.stringify({ approved, reviewer: 'dashboard-user' }),
+      });
+      loadHITL();
+    }
+
+    // ── Policies ───────────────────────────────────────────
+    async function loadPolicies() {
+      const data = await api('/policies/');
+      const pols = data?.policies ?? [];
+      const tbody = document.getElementById('pol-table-body');
+      const empty = document.getElementById('pol-empty');
+      if (pols.length === 0) {
+        tbody.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+      const stageBadge = s => ({ pre_execution:'badge-blue', post_execution:'badge-green', runtime:'badge-yellow' })[s] || 'badge-neutral';
+      const actionBadge = a => ({ block:'badge-red', redact:'badge-yellow', warn:'badge-purple', log:'badge-neutral' })[a] || 'badge-neutral';
+      tbody.innerHTML = pols.map(p => `<tr>
+        <td>${esc(p.app_id)}</td>
+        <td style="font-weight:600">${esc(p.name)}</td>
+        <td><span class="badge ${stageBadge(p.stage)}">${p.stage}</span></td>
+        <td><span class="badge ${actionBadge(p.action)}">${p.action}</span></td>
+        <td><button class="btn-sm btn-red" onclick="deletePolicy('${esc(p.app_id)}','${esc(p.name)}')">Delete</button></td>
+      </tr>`).join('');
+    }
+
+    function showCreatePolicy() { document.getElementById('modal-policy').classList.remove('hidden'); }
+
+    async function createPolicy() {
+      await api('/policies/', {
+        method: 'POST',
+        body: JSON.stringify({
+          app_id: document.getElementById('pol-app').value,
+          name: document.getElementById('pol-name').value,
+          stage: document.getElementById('pol-stage').value,
+          action: document.getElementById('pol-action').value,
+        }),
+      });
+      closeModal('modal-policy');
+      loadPolicies();
+    }
+
+    async function deletePolicy(appId, name) {
+      await api(`/policies/${appId}/${name}`, { method: 'DELETE' });
+      loadPolicies();
+    }
+
+    // ── Utils ──────────────────────────────────────────────
+    function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+    function esc(str) {
+      const div = document.createElement('div');
+      div.textContent = str ?? '';
+      return div.innerHTML;
+    }
+
+    // Close modals on overlay click
+    document.querySelectorAll('.modal-overlay').forEach(el => {
+      el.addEventListener('click', e => { if (e.target === el) el.classList.add('hidden'); });
+    });
+
+    // Initial load
+    loadOverview();
+  </script>
+</body>
+</html>
