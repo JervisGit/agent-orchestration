@@ -49,6 +49,10 @@ class AgentConfig:
     # Namespace: {"state": state, "taxpayer": state.get("taxpayer"), "output": state.get("output")}
     # Example: "taxpayer and taxpayer.get('penalty_count', 0) >= 3"
     hitl_condition: str | None = None
+    # Human-readable description of the action being proposed for supervisor approval.
+    # Shown in the HITL dashboard alongside approve/reject buttons.
+    # Example: "Grant full penalty waiver — update account SG-T008-5594 notes"
+    hitl_action: str | None = None
     # Arbitrary key/value pairs attached to this agent's Langfuse generation as metadata
     trace_metadata: dict[str, Any] = field(default_factory=dict)
 

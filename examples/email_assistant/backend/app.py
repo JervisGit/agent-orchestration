@@ -130,8 +130,8 @@ class TaxEmailState(TypedDict):
     subject: str
     input: str              # full email text
     route: str              # category chosen by classifier (router pattern)
-    intents: list[str]      # detected intents (magentic pattern)
-    specialist_outputs: dict  # per-specialist reply text (magentic pattern)
+    intents: list[str]      # detected intents (concurrent pattern)
+    specialist_outputs: dict  # per-specialist reply text (concurrent pattern)
     messages: list[dict]
     output: str             # draft reply
     taxpayer: dict | None   # row from taxpayers table (or None if not found)
@@ -139,6 +139,7 @@ class TaxEmailState(TypedDict):
     trace_id: str
     policy_flags: list[str]
     hitl_required: bool
+    hitl_action: str        # human-readable description of the action pending approval
 
 # ── DB lookup helpers ────────────────────────────────────────────────
 
@@ -213,6 +214,68 @@ async def node_lookup_taxpayer(state: TaxEmailState) -> dict:
 
 executor.register_pre_step("lookup_taxpayer", node_lookup_taxpayer)
 compiled_graph = executor.compile(state_schema=TaxEmailState)
+
+# ── HITL persistence helpers ──────────────────────────────────────────
+
+def _active_category(state: dict) -> str:
+    """Return the routing category from either router ('route') or concurrent ('intents')."""
+    intents = state.get("intents") or []
+    if intents:
+        return ", ".join(intents)
+    return state.get("route", "")
+
+async def _persist_hitl_request(
+    email: dict,
+    final_state: dict,
+    trace_id: str,
+) -> str | None:
+    """Write an ao_hitl_request row to PostgreSQL when HITL is required.
+
+    Returns the new request_id on success, or None if the write fails.
+    The payload stores:
+    - proposed_action: text from the manifest's hitl_action field
+    - taxpayer: taxpayer record used for the decision
+    - draft_reply: the AI-generated reply awaiting approval
+    - action_webhook: URL the dashboard calls to execute after approval
+    """
+    request_id = str(uuid.uuid4())
+    tp = final_state.get("taxpayer")
+    # Resolve {taxpayer_tax_id} placeholder in the hitl_action template
+    hitl_action_text = final_state.get("hitl_action", "Review decision")
+    if tp:
+        hitl_action_text = hitl_action_text.replace("{taxpayer_tax_id}", tp.get("tax_id", "?"))
+
+    payload = {
+        "email_id": email.get("id"),
+        "sender": email.get("from"),
+        "subject": email.get("subject"),
+        "proposed_action": hitl_action_text,
+        "draft_reply": final_state.get("output", ""),
+        "taxpayer_name": tp.get("full_name") if tp else None,
+        "taxpayer_tax_id": tp.get("tax_id") if tp else None,
+        "taxpayer_penalty_count": tp.get("penalty_count") if tp else None,
+        "trace_id": trace_id,
+        "action_webhook": f"http://localhost:8001/api/hitl/{request_id}/execute",
+    }
+    try:
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
+            await conn.execute(
+                """INSERT INTO ao_hitl_requests
+                   (request_id, workflow_id, step_name, status, payload)
+                   VALUES (%s, %s, %s, 'pending', %s)
+                   ON CONFLICT DO NOTHING""",
+                (
+                    request_id,
+                    "email-triage-v1",
+                    _active_category(final_state),
+                    json.dumps(payload),
+                ),
+            )
+        logger.info("HITL request persisted: %s (email %s)", request_id, email.get("id"))
+        return request_id
+    except Exception:
+        logger.warning("Failed to persist HITL request", exc_info=True)
+        return None
 
 # ── Sample taxpayer emails ──────────────────────────────────────────
 
@@ -422,7 +485,7 @@ async def process_email_stream(email_id: str):
             "input": full_text, "route": "", "intents": [], "specialist_outputs": {},
             "messages": [], "output": "",
             "taxpayer": None, "_context": "", "trace_id": trace_id,
-            "policy_flags": [], "hitl_required": False,
+            "policy_flags": [], "hitl_required": False, "hitl_action": "",
         }
 
         try:
@@ -455,13 +518,20 @@ async def process_email_stream(email_id: str):
 
             tp = final_state.get("taxpayer")
             hitl = final_state.get("hitl_required", False)
+            category = _active_category(final_state)
             email["status"] = "processed"
-            email["category"] = final_state["route"]
+            email["category"] = category
             email["draft_reply"] = final_state["output"]
             email["policy_flags"] = flags
             email["hitl_required"] = hitl
             if tp:
                 email["taxpayer_name"] = tp.get("full_name")
+
+            hitl_request_id: str | None = None
+            if hitl:
+                hitl_request_id = await _persist_hitl_request(email, final_state, trace_id)
+                if hitl_request_id:
+                    email["hitl_request_id"] = hitl_request_id
 
             langfuse_url = (
                 f"{os.getenv('LANGFUSE_HOST', 'http://localhost:3000')}/traces/{trace_id}"
@@ -471,27 +541,30 @@ async def process_email_stream(email_id: str):
                 "trace_id": trace_id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "email_id": email_id,
-                "category": final_state["route"],
+                "category": category,
                 "taxpayer_found": tp is not None,
                 "taxpayer_id": tp.get("tax_id") if tp else None,
                 "taxpayer_name": tp.get("full_name") if tp else None,
                 "policy_flags": flags,
                 "hitl_required": hitl,
+                "hitl_request_id": hitl_request_id,
                 "graph_nodes_visited": [m["role"] for m in final_state.get("messages", [])],
                 "langfuse_url": langfuse_url,
             }
             processing_log.append(entry)
 
             result = {
-                "email_id": email_id, "category": final_state["route"],
+                "email_id": email_id, "category": category,
                 "draft_reply": final_state["output"],
                 "taxpayer_found": tp is not None,
                 "taxpayer_id": tp.get("tax_id") if tp else None,
-                "policy_flags": flags, "hitl_required": hitl, "trace_id": trace_id,
+                "policy_flags": flags, "hitl_required": hitl,
+                "hitl_request_id": hitl_request_id,
+                "trace_id": trace_id,
                 "langfuse_url": langfuse_url,
             }
             yield f"data: {json.dumps({'type': 'complete', 'result': result})}\n\n"
-            logger.info("SSE stream complete for email %s → %s", email_id, final_state["route"])
+            logger.info("SSE stream complete for email %s → %s", email_id, category)
 
         except Exception as exc:
             logger.exception("SSE stream error for email %s", email_id)
@@ -517,7 +590,7 @@ async def process_email(email_id: str) -> ProcessResult:
         "input": full_text, "route": "", "intents": [], "specialist_outputs": {},
         "messages": [], "output": "",
         "taxpayer": None, "_context": "", "trace_id": trace_id,
-        "policy_flags": [], "hitl_required": False,
+        "policy_flags": [], "hitl_required": False, "hitl_action": "",
     }
 
     result = await executor.ainvoke(initial_state)
@@ -536,39 +609,47 @@ async def process_email(email_id: str) -> ProcessResult:
 
     tp = result.get("taxpayer")
     hitl = result.get("hitl_required", False)
+    category = _active_category(result)
 
     email["status"] = "processed"
-    email["category"] = result["route"]
+    email["category"] = category
     email["draft_reply"] = result["output"]
     email["policy_flags"] = flags
     email["hitl_required"] = hitl
     if tp:
         email["taxpayer_name"] = tp.get("full_name")
 
+    hitl_request_id: str | None = None
+    if hitl:
+        hitl_request_id = await _persist_hitl_request(email, result, trace_id)
+        if hitl_request_id:
+            email["hitl_request_id"] = hitl_request_id
+
     entry = {
         "trace_id": trace_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "email_id": email_id,
-        "category": result["route"],
+        "category": category,
         "taxpayer_found": tp is not None,
         "taxpayer_id": tp.get("tax_id") if tp else None,
         "taxpayer_name": tp.get("full_name") if tp else None,
         "policy_flags": flags,
         "hitl_required": hitl,
+        "hitl_request_id": hitl_request_id,
         "graph_nodes_visited": [m["role"] for m in result.get("messages", [])],
         "langfuse_url": f"{os.getenv('LANGFUSE_HOST', 'http://localhost:3000')}/traces/{trace_id}" if langfuse_client else None,
     }
     processing_log.append(entry)
     logger.info(
         "Processed %s → %s | taxpayer=%s | hitl=%s | trace=%s",
-        email_id, result["route"],
+        email_id, category,
         tp.get("tax_id") if tp else "NOT FOUND",
         hitl, trace_id,
     )
 
     return ProcessResult(
         email_id=email_id,
-        category=result["route"],
+        category=category,
         draft_reply=result["output"],
         taxpayer_found=tp is not None,
         taxpayer_id=tp.get("tax_id") if tp else None,
@@ -583,6 +664,75 @@ async def process_all():
     ids = [e["id"] for e in emails_db.values() if e["status"] == "new"]
     results = await asyncio.gather(*[process_email(eid) for eid in ids])
     return {"processed": len(results), "results": [r.model_dump() for r in results]}
+
+
+# ── HITL execution endpoint ──────────────────────────────────────────
+# Called by the dashboard's Approve button (via payload.action_webhook).
+# Executes the approved action (update taxpayer notes) and marks the
+# HITL request as executed in ao_hitl_requests.
+
+class HITLResolve(BaseModel):
+    approved: bool
+    reviewer: str = "dashboard-user"
+    note: str = ""
+
+@app.post("/api/hitl/{request_id}/execute")
+async def execute_hitl_action(request_id: str, body: HITLResolve):
+    """Execute the approved HITL action and mark the request as executed.
+
+    Called by the AO Dashboard after the supervisor clicks Approve.
+    On approval: updates the taxpayer record notes and marks the email resolved.
+    On rejection: marks as rejected, no DB changes to taxpayer record.
+    """
+    now = datetime.now(timezone.utc)
+    try:
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL, row_factory=dict_row) as conn:
+            # Fetch the request
+            cur = await conn.execute(
+                "SELECT * FROM ao_hitl_requests WHERE request_id = %s", (request_id,)
+            )
+            req = await cur.fetchone()
+            if not req:
+                raise HTTPException(status_code=404, detail="HITL request not found")
+
+            status = "approved" if body.approved else "rejected"
+
+            if body.approved:
+                payload = req["payload"] if isinstance(req["payload"], dict) else json.loads(req["payload"])
+                tax_id = payload.get("taxpayer_tax_id")
+                action_text = payload.get("proposed_action", "HITL action approved")
+                email_id = payload.get("email_id")
+
+                if tax_id:
+                    note_text = (
+                        f"[{now.strftime('%Y-%m-%d')}] Penalty waiver APPROVED by {body.reviewer}. "
+                        f"Action: {action_text}"
+                    )
+                    await conn.execute(
+                        "UPDATE taxpayers SET notes = notes || %s WHERE tax_id = %s",
+                        (f"\n{note_text}", tax_id),
+                    )
+                    logger.info("HITL approved: updated taxpayer notes for %s", tax_id)
+
+                if email_id and email_id in emails_db:
+                    emails_db[email_id]["status"] = "hitl_approved"
+                    emails_db[email_id]["hitl_resolved"] = True
+
+            # Mark request resolved
+            await conn.execute(
+                "UPDATE ao_hitl_requests "
+                "SET status=%s, reviewer=%s, note=%s, resolved_at=%s "
+                "WHERE request_id=%s",
+                (status, body.reviewer, body.note, now, request_id),
+            )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("HITL execute failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {"status": status, "request_id": request_id, "executed": body.approved}
 
 @app.get("/api/stats")
 async def stats():

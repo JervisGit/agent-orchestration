@@ -94,12 +94,12 @@ class ManifestExecutor:
         """
         if self._manifest.pattern == "router":
             return self._compile_router(state_schema)
-        if self._manifest.pattern == "magentic":
-            return self._compile_magentic(state_schema)
+        if self._manifest.pattern in ("concurrent", "magentic"):
+            return self._compile_concurrent(state_schema)
         raise NotImplementedError(
             f"Pattern '{self._manifest.pattern}' not yet supported by ManifestExecutor. "
-            "Supported: 'router', 'magentic'. For others, register your graph manually "
-            "via LangGraphEngine."
+            "Supported: 'router', 'concurrent'. 'magentic' is an alias for 'concurrent'. "
+            "For 'linear', 'supervisor', 'planner', register your graph via LangGraphEngine."
         )
 
     def _compile_router(self, state_schema: type) -> Any:
@@ -154,8 +154,12 @@ class ManifestExecutor:
         )
         return self._compiled
 
-    def _compile_magentic(self, state_schema: type) -> Any:
-        """Build the magentic pattern: [pre-steps] → intent_classify → dispatch → merge → END."""
+    def _compile_concurrent(self, state_schema: type) -> Any:
+        """Build the concurrent pattern: [pre-steps] → intent_classify → dispatch → merge → END.
+
+        Also accessible as pattern='magentic' (alias kept for backwards compatibility).
+        Corresponds to Microsoft's 'Concurrent orchestration' pattern.
+        """
         agents = {a.name: a for a in self._manifest.agents}
         classifier_name = self._manifest.classifier_agent
 
@@ -204,7 +208,7 @@ class ManifestExecutor:
 
         self._compiled = graph.compile()
         logger.info(
-            "ManifestExecutor compiled '%s' (magentic pattern, %d intent agents, %d pre-steps)",
+            "ManifestExecutor compiled '%s' (concurrent pattern, %d intent agents, %d pre-steps)",
             self._manifest.app_id, len(specialists_cfg), len(self._pre_steps),
         )
         return self._compiled
@@ -404,6 +408,7 @@ class ManifestExecutor:
                             f"HITL_REQUIRED: agent={cfg.name} condition=({cfg.hitl_condition})"
                         )
                         result["hitl_required"] = True
+                        result["hitl_action"] = cfg.hitl_action or f"Review {cfg.name} decision"
                         result["policy_flags"] = flags
                         logger.info(
                             "HITL triggered for agent '%s' (trace %s)",
@@ -532,7 +537,7 @@ class ManifestExecutor:
                 except Exception:
                     pass
 
-            result: dict = {"output": resp.content, "hitl_required": False, "policy_flags": []}
+            result: dict = {"output": resp.content, "hitl_required": False, "policy_flags": [], "hitl_action": ""}
 
             if cfg.hitl_condition:
                 try:
@@ -544,6 +549,7 @@ class ManifestExecutor:
                     ))
                     if hitl:
                         result["hitl_required"] = True
+                        result["hitl_action"] = cfg.hitl_action or f"Review {cfg.name} decision"
                         result["policy_flags"].append(
                             f"HITL_REQUIRED: agent={cfg.name} condition=({cfg.hitl_condition})"
                         )
@@ -568,6 +574,7 @@ class ManifestExecutor:
 
             specialist_outputs = {name: r["output"] for name, r in zip(valid, results)}
             hitl_required = any(r["hitl_required"] for r in results)
+            hitl_action = next((r["hitl_action"] for r in results if r.get("hitl_action")), "")
 
             all_flags = list(state.get("policy_flags", []))
             for r in results:
@@ -577,6 +584,7 @@ class ManifestExecutor:
                 "specialist_outputs": specialist_outputs,
                 "intents": valid,
                 "hitl_required": hitl_required,
+                "hitl_action": hitl_action,
                 "policy_flags": all_flags,
                 "messages": state.get("messages", []) + [
                     {"role": "dispatch", "content": f"Dispatched to: {', '.join(valid)}"}

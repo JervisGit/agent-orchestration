@@ -13,8 +13,19 @@ description: >
 identity_mode: service
 
 # -- Workflow -----------------------------------------------------------
-pattern: router
+# concurrent = Microsoft 'Concurrent orchestration': intent_classify detects ALL intents,
+# dispatch fans out to each matched specialist via asyncio.gather, merge synthesises.
+# For single-intent emails (em-001 to em-006) the intent classifier returns one item
+# and merge passes the specialist output through unchanged.
+# For multi-intent (em-007) both filing_extension and payment_arrangement run in parallel.
+pattern: concurrent
 classifier_agent: classifier
+intent_agents:
+  - filing_extension
+  - payment_arrangement
+  - assessment_relief
+  - penalty_waiver
+  - general_inquiry
 
 # -- Observability ------------------------------------------------------
 langfuse_project: email-assistant
@@ -25,9 +36,15 @@ agents:
   - name: classifier
     system_prompt: |
       You are a tax authority email triage classifier.
-      Classify the email into exactly ONE of:
+      Identify ALL applicable categories from the email. Use this exact list:
       {categories}
-      Reply with ONLY the category name. Nothing else.
+      Reply with ONLY the matching category names as a comma-separated list.
+      Use exactly ONE category for most emails.
+      Use TWO OR MORE only if the email clearly contains separate distinct requests
+      that each require a different specialist (e.g. both a filing extension request
+      AND a payment arrangement request in the same email).
+      Example single-intent reply: "penalty_waiver"
+      Example multi-intent reply:  "filing_extension, payment_arrangement"
     model: gpt-4.1-mini
     temperature: 0.0
 
@@ -101,6 +118,10 @@ agents:
     trace_metadata:
       division: Compliance
     hitl_condition: "taxpayer and taxpayer.get('penalty_count', 0) >= 3"
+    hitl_action: >-
+      Grant full penalty waiver for account {taxpayer_tax_id} (penalty_count ≥ 3).
+      Update taxpayer notes to record supervisor approval and date.
+      Notify taxpayer by email that waiver has been approved.
     sop: |
       STANDARD OPERATING PROCEDURE - Penalty Waiver Request
       1. Check the taxpayer's PENALTY COUNT from their record:
@@ -149,34 +170,21 @@ policies:
     action: warn
 
 # -- Magentic example --------------------------------------------------
-# Uncomment (and remove the 'router' block above) to switch to the
-# magentic pattern. The classifier prompt must ask for a comma-separated
-# list of ALL applicable categories. ManifestExecutor then dispatches to
-# every matched specialist concurrently and merges the replies.
+# The 'concurrent' pattern above IS the Microsoft 'Concurrent orchestration' pattern.
+# 'magentic' is accepted as an alias for 'concurrent' in ManifestExecutor.
 #
-# pattern: magentic
-# classifier_agent: classifier
-# intent_agents:
-#   - filing_extension
-#   - payment_arrangement
-#   - assessment_relief
-#   - penalty_waiver
-#   - general_inquiry
+# True Magentic-One (Microsoft) = an orchestrator LLM that dynamically plans which
+# specialists to call, reviews each result, and re-plans. That maps closer to the
+# AO 'supervisor' pattern where the orchestrator loops over workers iteratively.
+# A supervisor-with-specialists manifest would look like:
 #
-# Classifier agent for magentic — note the multi-intent instruction:
+# pattern: supervisor
 # agents:
-#   - name: classifier
+#   - name: orchestrator
 #     system_prompt: |
-#       You are a tax authority email triage classifier.
-#       Identify ALL applicable categories from this list:
-#       {categories}
-#       Reply with ONLY the matching category names as a comma-separated list.
-#       Example: "filing_extension, payment_arrangement"
-#     model: gpt-4.1-mini
-#     temperature: 0.0
-#
-# Sample email that exercises multi-intent dispatch (em-007):
-#   "I need a filing extension AND I can't afford the full payment."
-#   → intent_classify returns: ["filing_extension", "payment_arrangement"]
-#   → both specialists run concurrently via asyncio.gather
-#   → merge node synthesises a single coherent reply covering both topics
+#       You are the orchestrator. Read the taxpayer email, decide which specialist to
+#       call next (filing_extension|payment_arrangement|...|FINISH), review the result,
+#       and decide whether to call another or finish.
+#       Return JSON: {"next": "<specialist_name>" | "FINISH", "instruction": "..."}
+#   - name: filing_extension
+#     ...etc

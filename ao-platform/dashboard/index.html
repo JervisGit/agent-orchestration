@@ -314,11 +314,11 @@
       <div id="page-hitl" class="hidden">
         <div class="page-header">
           <div class="page-title">HITL Approvals</div>
-          <div class="page-subtitle">Human-in-the-loop approval queue</div>
+          <div class="page-subtitle">Pending supervisor actions — approve or reject an agent’s proposed update. Click a row to expand detail.</div>
         </div>
         <div class="table-container">
           <table>
-            <thead><tr><th>Request ID</th><th>Workflow</th><th>Step</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>ID</th><th>Taxpayer</th><th>Proposed Action</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="hitl-table-body"></tbody>
           </table>
           <div id="hitl-empty" class="empty-state">No pending approvals. Workflows are running autonomously.</div>
@@ -355,8 +355,8 @@
             <p>Classifies inbound emails, routes to specialist agents, drafts replies with policy enforcement.</p>
             <div class="app-tile-meta">
               <span class="badge badge-green">Running</span>
-              <span class="badge badge-neutral">Router Pattern</span>
-              <span class="badge badge-blue">5 categories</span>
+              <span class="badge badge-neutral">Concurrent Pattern</span>
+              <span class="badge badge-blue">5 specialists</span>
             </div>
           </div>
           <div class="app-tile">
@@ -551,6 +551,7 @@
       empty.classList.add('hidden');
       const patternBadge = p => ({
         linear: 'badge-blue', router: 'badge-green', supervisor: 'badge-purple', planner: 'badge-yellow',
+        concurrent: 'badge-green', magentic: 'badge-green', handoff: 'badge-green',
       })[p] || 'badge-neutral';
       tbody.innerHTML = wfs.map(w => `<tr>
         <td style="font-weight:600">${esc(w.workflow_id)}</td>
@@ -587,9 +588,14 @@
     }
 
     // ── HITL ───────────────────────────────────────────────
+    // _hitlItems caches the current pending list so resolveHITL can look up
+    // the action_webhook without a second API call.
+    let _hitlItems = [];
+
     async function loadHITL() {
       const data = await api('/hitl/pending');
       const items = data?.pending ?? [];
+      _hitlItems = items;
       const tbody = document.getElementById('hitl-table-body');
       const empty = document.getElementById('hitl-empty');
       if (items.length === 0) {
@@ -598,23 +604,81 @@
         return;
       }
       empty.classList.add('hidden');
-      tbody.innerHTML = items.map(h => `<tr>
-        <td style="font-family:monospace;font-size:12px">${esc(h.request_id?.slice(0,8) ?? '?')}...</td>
-        <td>${esc(h.workflow_id ?? '—')}</td>
-        <td>${esc(h.step_name ?? '—')}</td>
-        <td><span class="badge badge-yellow">pending</span></td>
-        <td>
-          <button class="btn-sm btn-green" onclick="resolveHITL('${h.request_id}',true)">✓ Approve</button>
-          <button class="btn-sm btn-red" onclick="resolveHITL('${h.request_id}',false)">✕ Reject</button>
-        </td>
-      </tr>`).join('');
+      tbody.innerHTML = items.flatMap(h => {
+        const payload = typeof h.payload === 'string' ? JSON.parse(h.payload) : (h.payload ?? {});
+        const action  = esc(payload.proposed_action ?? h.step_name ?? '—');
+        const tpName  = esc(payload.taxpayer_name  ?? '—');
+        const tpId    = esc(payload.taxpayer_tax_id ?? '');
+        const tpPen   = payload.taxpayer_penalty_count != null ? payload.taxpayer_penalty_count : '—';
+        const draft   = esc(payload.draft_reply ?? '');
+        const rid     = h.request_id;
+        return [
+          // -- Summary row --
+          `<tr class="trace-row" onclick="toggleHITLDetail('${rid}')" style="cursor:pointer">
+            <td style="font-family:monospace;font-size:11px;color:var(--text2)">${esc(rid?.slice(0,8) ?? '?')}…</td>
+            <td>
+              <span style="font-weight:600">${tpName}</span>
+              ${tpId ? `<br><span style="font-size:11px;color:var(--text2);font-family:monospace">${tpId}</span>` : ''}
+            </td>
+            <td style="max-width:340px">
+              <span class="badge badge-yellow" style="margin-bottom:4px">supervisor approval required</span><br>
+              <span style="font-size:12px">${action}</span>
+            </td>
+            <td><span class="badge badge-yellow">pending</span></td>
+            <td style="white-space:nowrap">
+              <button class="btn-sm btn-green" onclick="event.stopPropagation();resolveHITL('${rid}',true)">✔ Approve Action</button>
+              <button class="btn-sm btn-red"   onclick="event.stopPropagation();resolveHITL('${rid}',false)">✕ Reject</button>
+            </td>
+          </tr>`,
+          // -- Expandable detail row (hidden by default) --
+          `<tr id="hitl-detail-${rid}" class="hidden">
+            <td colspan="5" style="padding:0">
+              <div class="trace-detail">
+                <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">Taxpayer context</div>
+                <div style="font-size:12px;margin-bottom:12px">
+                  <strong>${tpName}</strong> &nbsp;·&nbsp; TIN: <code>${tpId || '—'}</code>
+                  &nbsp;·&nbsp; Penalty count: <strong style="color:var(--red)">${tpPen}</strong>
+                </div>
+                <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">Proposed action</div>
+                <div style="background:rgba(234,179,8,.08);border:1px solid rgba(234,179,8,.3);border-radius:6px;padding:10px 14px;font-size:13px;margin-bottom:12px">${action}</div>
+                <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">AI-drafted reply (pending approval)</div>
+                <pre style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:12px;white-space:pre-wrap;font-family:inherit;margin:0">${draft}</pre>
+              </div>
+            </td>
+          </tr>`,
+        ];
+      }).join('');
+    }
+
+    function toggleHITLDetail(rid) {
+      const row = document.getElementById(`hitl-detail-${rid}`);
+      if (row) row.classList.toggle('hidden');
     }
 
     async function resolveHITL(id, approved) {
+      const item = _hitlItems.find(h => h.request_id === id);
+      const payload = item ? (typeof item.payload === 'string' ? JSON.parse(item.payload) : (item.payload ?? {})) : {};
+
+      // 1. Mark resolved in the AO Platform DB
       await api(`/hitl/${id}/resolve`, {
         method: 'POST',
         body: JSON.stringify({ approved, reviewer: 'dashboard-user' }),
       });
+
+      // 2. If approved and the app registered an action_webhook, call it to execute
+      //    the actual DB update (e.g. update taxpayer notes).
+      if (approved && payload.action_webhook) {
+        try {
+          await fetch(payload.action_webhook, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ approved: true, reviewer: 'dashboard-user' }),
+          });
+        } catch (e) {
+          console.warn('action_webhook call failed:', e);
+        }
+      }
+
       loadHITL();
     }
 
