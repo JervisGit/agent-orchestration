@@ -514,16 +514,18 @@ async def process_email_stream(email_id: str):
         logger.info("SSE stream starting for email %s (trace %s)", email_id, trace_id)
         full_text = f"From: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"
 
-        # Open Langfuse trace
+        # Open Langfuse trace — wrap in try so a Langfuse error never kills the stream
         lf_trace = None
         if langfuse_client:
-            tp = email.get("taxpayer_name")
-            lf_trace = langfuse_client.trace(
-                name="process-email",
-                id=trace_id,
-                input=full_text,
-                metadata={"email_id": email_id, "sender": email["from"], "subject": email["subject"]},
-            )
+            try:
+                lf_trace = langfuse_client.trace(
+                    name="process-email",
+                    id=trace_id,
+                    input=full_text,
+                    metadata={"email_id": email_id, "sender": email["from"], "subject": email["subject"]},
+                )
+            except Exception:
+                logger.warning("Langfuse trace() failed — continuing without tracing", exc_info=True)
         _active_traces[trace_id] = lf_trace
 
         yield f"data: {json.dumps({'type': 'start', 'trace_id': trace_id})}\n\n"
