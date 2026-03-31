@@ -4,3 +4,8 @@ INFO:     Started reloader process [26784] using StatReload
 INFO:     Started server process [5728]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'examples\email_assistant\backend\app.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [5728]
