@@ -12,34 +12,41 @@
 - 78 unit / integration / eval / load tests
 - ADRs 001–006
 
-## Phase 2 — Manifest-Driven Engine ✅ (this session)
+## Phase 2 — Manifest-Driven Engine ✅
 *Goal: app teams declare agents + SOPs in YAML; no LangGraph code in app repos.*
 
 - ADR-007: config-driven agents decision
-- `AgentConfig`: add `sop`, `hitl_condition`, `trace_metadata` fields
-- `AppManifest`: add `pattern`, `classifier_agent`, `intent_agents` fields
-- `ManifestExecutor`: reads `ao-manifest.yaml`, builds the LangGraph graph, manages
-  Langfuse trace lifecycle — apps never import `StateGraph` or `END`
+- `AgentConfig`: `sop`, `hitl_condition`, `hitl_action`, `trace_metadata` fields
+- `AppManifest`: `pattern`, `classifier_agent`, `intent_agents` fields
+- `ManifestExecutor`: reads `ao-manifest.yaml`, builds LangGraph automatically
   - `router` pattern: classify → one specialist → END
-  - `magentic` pattern: detect all intents → parallel dispatch via `asyncio.gather`
-    → LLM merge → END (multi-intent emails get full coverage from every specialist)
-- Pattern library: `router`, `linear`, `supervisor`, `planner`, `magentic`
-- Email assistant refactored: `app.py` uses `ManifestExecutor`; LangGraph dependency
-  isolated entirely inside `ao-core`
-- `ao-manifest.yaml`: full declaration of 5 specialist agents with SOPs + policies
-- Sample emails updated: em-006 (Fatimah penalty waiver → HITL demo),
-  em-007 (multi-intent filing + payment → magentic pattern demo)
+  - `concurrent` pattern (was `magentic`): detect all intents → parallel dispatch
+    → LLM merge → END; merge node has Langfuse generation span
+- Pattern library: `router`, `linear`, `supervisor`, `planner`, `concurrent`
+- Email assistant: `app.py` uses `ManifestExecutor`; `ao-manifest.yaml` declares
+  5 specialists with SOPs; LangGraph isolated entirely inside `ao-core`
+- HITL end-to-end: `hitl_condition` in manifest → `_persist_hitl_request()` → DB row
+  → Dashboard HITL queue → approve/reject → `action_webhook` → taxpayer notes updated
+  → HITL resolution event written back to originating Langfuse trace ✅
+- Dashboard: HITL table with taxpayer name + proposed action + expandable detail
+- Email assistant UI: collapsible agent workflow panel, HITL approve/reject buttons,
+  conditional DB lookup (skips if no TIN in email body), formal MS-style styling ✅
+- Sample emails: em-006 (HITL demo), em-007 (multi-intent concurrent pattern demo)
 
 ## Phase 3 — Production Readiness
 *Goal: safe to deploy, observable in Azure.*
 
-- [ ] Structured JSON logging (`python-json-logger`) with `trace_id` on every line
-- [ ] `/healthz` endpoint: LLM ping, DB ping, Langfuse ping — used by ACA health probes
+- [x] HITL escalation events traced (resolution event on originating Langfuse trace) ✅
+- [x] Container images updated to Python 3.13, correct runtime deps ✅
+- [x] `Dockerfile.email-assistant` added ✅
+- [x] `/healthz` endpoints: DB ping + LLM ping — used by ACA health probes ✅
+- [x] Structured JSON logging (`python-json-logger`) with `trace_id` per line ✅
+- [x] Email assistant Container App added to ACA Terraform module ✅
+- [x] CI/CD pipeline (`ci.yml`) builds + deploys email_assistant image ✅
+- [x] `staging.tfvars` environment added ✅
 - [ ] Config-driven tracing: switch `ManifestExecutor` to `LangfuseCallbackHandler`
       for auto-tracing; remove manual span/generation calls from executor nodes
 - [ ] Policy evaluation Langfuse span (currently silent in post-execution check)
-- [ ] HITL escalation events traced
-- [ ] Staging environment (Terraform `staging.tfvars`)
 
 ## Phase 4 — RAG Search Example
 *Goal: validate manifest + linear pattern; second reference app.*
@@ -66,10 +73,9 @@
 
 ---
 
-## Open Items (pre-production blockers)
+## Open Items (pre-production)
 See `docs/decisions/006-observability-runtime-decisions.md` for full detail.
 
-- Structured JSON logging
-- `/healthz` endpoint
 - Policies + SOPs loaded from DB / manifest (not hardcoded Python)
 - Config-driven Langfuse tracing via `LangfuseCallbackHandler`
+- Policy evaluation Langfuse span

@@ -81,6 +81,11 @@ output "postgresql_fqdn" {
   value = azurerm_postgresql_flexible_server.ao.fqdn
 }
 
+output "postgresql_connection_string" {
+  value     = "postgresql://aoadmin:${var.admin_password}@${azurerm_postgresql_flexible_server.ao.fqdn}:5432/ao?sslmode=require"
+  sensitive = true
+}
+
 output "redis_hostname" {
   value = azurerm_redis_cache.ao.hostname
 }

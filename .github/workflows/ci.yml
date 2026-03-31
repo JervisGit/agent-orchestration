@@ -133,6 +133,10 @@ jobs:
         run: |
           docker build -f docker/Dockerfile.ao-worker -t ${{ env.REGISTRY }}/ao-worker:${{ github.sha }} .
           docker push ${{ env.REGISTRY }}/ao-worker:${{ github.sha }}
+      - name: Build and push email-assistant
+        run: |
+          docker build -f docker/Dockerfile.email-assistant -t ${{ env.REGISTRY }}/email-assistant:${{ github.sha }} .
+          docker push ${{ env.REGISTRY }}/email-assistant:${{ github.sha }}
 
   # ── Deploy to Dev ────────────────────────────────────────────────
   deploy-dev:
@@ -163,6 +167,10 @@ jobs:
             --name ca-ao-worker-dev \
             --resource-group rg-ao-dev \
             --image ${{ env.REGISTRY }}/ao-worker:${{ github.sha }}
+          az containerapp update \
+            --name ca-email-assistant-dev \
+            --resource-group rg-ao-dev \
+            --image ${{ env.REGISTRY }}/email-assistant:${{ github.sha }}
 
       # ── AKS deploy path ──
       - name: Deploy to AKS

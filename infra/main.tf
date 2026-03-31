@@ -91,6 +91,7 @@ module "aca" {
   ao_worker_identity_id           = module.security.ao_worker_identity_id
   ao_api_identity_principal_id    = module.security.ao_api_identity_principal_id
   ao_worker_identity_principal_id = module.security.ao_worker_identity_principal_id
+  database_url                    = module.database.postgresql_connection_string
   tags                            = var.tags
 }
 
@@ -113,6 +114,10 @@ output "compute_platform" {
 
 output "api_url" {
   value = var.compute_platform == "aca" ? module.aca[0].api_url : "kubectl port-forward or ingress — see AKS deployment docs"
+}
+
+output "email_assistant_url" {
+  value = var.compute_platform == "aca" ? module.aca[0].email_assistant_url : "kubectl port-forward or ingress — see AKS deployment docs"
 }
 
 output "postgresql_fqdn" {

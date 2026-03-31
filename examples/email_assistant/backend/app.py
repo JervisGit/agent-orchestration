@@ -40,10 +40,29 @@ from ao.policy.schema import PolicySet
 
 # ── Config ─────────────────────────────────────────────────────────
 load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=True)
-logger = logging.getLogger("tax_email_assistant")
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 MANIFEST_PATH = Path(__file__).parent.parent / "ao-manifest.yaml"
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://ao:localdev@localhost:5432/ao")
+
+# ── Structured JSON logging ─────────────────────────────────────────
+def _configure_logging() -> None:
+    import sys
+    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    try:
+        from pythonjsonlogger import jsonlogger
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(
+            jsonlogger.JsonFormatter(
+                "%(asctime)s %(name)s %(levelname)s %(message)s",
+                rename_fields={"asctime": "timestamp", "levelname": "level"},
+            )
+        )
+        logging.basicConfig(level=log_level, handlers=[handler], force=True)
+    except ImportError:
+        logging.basicConfig(level=log_level, stream=sys.stdout)
+
+_configure_logging()
+logger = logging.getLogger("tax_email_assistant")
 
 
 # ── LLM ────────────────────────────────────────────────────────────
@@ -776,6 +795,35 @@ async def execute_hitl_action(request_id: str, body: HITLResolve):
         raise HTTPException(status_code=500, detail=str(exc))
 
     return {"status": status, "request_id": request_id, "executed": body.approved}
+
+@app.get("/healthz")
+async def healthz():
+    """Health check for ACA liveness/readiness probes."""
+    checks: dict[str, str] = {}
+
+    # Database ping
+    try:
+        async with await psycopg.AsyncConnection.connect(
+            DATABASE_URL, connect_timeout=3
+        ) as conn:
+            await conn.execute("SELECT 1")
+        checks["db"] = "ok"
+    except Exception as exc:
+        checks["db"] = f"error: {exc}"
+
+    # LLM ping (lightweight — just checks the provider is reachable)
+    try:
+        probe = await llm.complete(
+            messages=[{"role": "user", "content": "ping"}],
+            temperature=0,
+            max_tokens=1,
+        )
+        checks["llm"] = "ok" if probe else "no response"
+    except Exception as exc:
+        checks["llm"] = f"error: {exc}"
+
+    status = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
+    return {"status": status, "checks": checks}
 
 @app.get("/api/stats")
 async def stats():

@@ -1,0 +1,28 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY ao-core/ ./ao-core/
+COPY examples/email_assistant/backend/ ./backend/
+COPY examples/email_assistant/frontend/ ./frontend/
+COPY examples/email_assistant/ao-manifest.yaml ./ao-manifest.yaml
+
+RUN pip install --no-cache-dir \
+    ./ao-core \
+    fastapi \
+    uvicorn[standard] \
+    python-multipart \
+    python-dotenv \
+    python-json-logger
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8001/healthz || exit 1
+
+CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2"]

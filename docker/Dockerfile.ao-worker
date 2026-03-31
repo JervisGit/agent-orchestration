@@ -1,10 +1,19 @@
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY ao-core/ ./ao-core/
 COPY ao-platform/workers/ ./workers/
 
-RUN pip install --no-cache-dir ./ao-core
+RUN pip install --no-cache-dir \
+    ./ao-core \
+    python-json-logger
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 
 CMD ["python", "-m", "workers"]
