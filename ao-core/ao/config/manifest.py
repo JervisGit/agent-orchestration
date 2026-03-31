@@ -61,10 +61,13 @@ class AppManifest:
     display_name: str
     description: str = ""
 
-    # Workflow pattern: "router" | "linear" | "supervisor" | "planner"
+    # Workflow pattern: "router" | "linear" | "supervisor" | "planner" | "magentic"
     pattern: str = "router"
-    # Name of the agent that classifies/routes (used by ManifestExecutor for router pattern)
+    # Name of the agent that classifies/routes (used by ManifestExecutor for router/magentic)
     classifier_agent: str = "classifier"
+    # Agents eligible for multi-intent dispatch (magentic pattern only).
+    # If empty, all non-classifier agents are candidates.
+    intent_agents: list[str] = field(default_factory=list)
 
     # Identity
     identity_mode: IdentityMode = IdentityMode.SERVICE
@@ -115,6 +118,7 @@ class AppManifest:
             langfuse_project=data.get("langfuse_project"),
             llm_endpoint=data.get("llm_endpoint"),
             llm_api_key_secret=data.get("llm_api_key_secret"),
+            intent_agents=data.get("intent_agents", []),
         )
 
     @classmethod

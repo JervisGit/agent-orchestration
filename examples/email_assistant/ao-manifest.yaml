@@ -1,4 +1,4 @@
-# Tax Email Assistant � AO App Manifest
+# Tax Email Assistant � AO App Manifest
 # Declares agents, SOPs, tools, and policies.
 # ManifestExecutor reads this file and builds the LangGraph automatically.
 # App code (app.py) only needs: DB lookup node, state schema, FastAPI routes.
@@ -147,3 +147,36 @@ policies:
   - name: tax_accuracy
     stage: post_execution
     action: warn
+
+# -- Magentic example --------------------------------------------------
+# Uncomment (and remove the 'router' block above) to switch to the
+# magentic pattern. The classifier prompt must ask for a comma-separated
+# list of ALL applicable categories. ManifestExecutor then dispatches to
+# every matched specialist concurrently and merges the replies.
+#
+# pattern: magentic
+# classifier_agent: classifier
+# intent_agents:
+#   - filing_extension
+#   - payment_arrangement
+#   - assessment_relief
+#   - penalty_waiver
+#   - general_inquiry
+#
+# Classifier agent for magentic — note the multi-intent instruction:
+# agents:
+#   - name: classifier
+#     system_prompt: |
+#       You are a tax authority email triage classifier.
+#       Identify ALL applicable categories from this list:
+#       {categories}
+#       Reply with ONLY the matching category names as a comma-separated list.
+#       Example: "filing_extension, payment_arrangement"
+#     model: gpt-4.1-mini
+#     temperature: 0.0
+#
+# Sample email that exercises multi-intent dispatch (em-007):
+#   "I need a filing extension AND I can't afford the full payment."
+#   → intent_classify returns: ["filing_extension", "payment_arrangement"]
+#   → both specialists run concurrently via asyncio.gather
+#   → merge node synthesises a single coherent reply covering both topics

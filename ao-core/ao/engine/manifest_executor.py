@@ -38,6 +38,7 @@ App-specific pre-steps (e.g. DB lookup node) can retrieve the live trace
 via executor.get_trace(trace_id) and attach custom spans to it.
 """
 
+import asyncio
 import logging
 import uuid
 from collections.abc import AsyncGenerator, Callable
@@ -91,12 +92,18 @@ class ManifestExecutor:
         Returns the compiled graph (same object returned by StateGraph.compile()).
         Also stored as self._compiled for use by astream()/ainvoke().
         """
-        if self._manifest.pattern != "router":
-            raise NotImplementedError(
-                f"Pattern '{self._manifest.pattern}' not yet supported by ManifestExecutor. "
-                "Use 'router' or register your graph manually via LangGraphEngine."
-            )
+        if self._manifest.pattern == "router":
+            return self._compile_router(state_schema)
+        if self._manifest.pattern == "magentic":
+            return self._compile_magentic(state_schema)
+        raise NotImplementedError(
+            f"Pattern '{self._manifest.pattern}' not yet supported by ManifestExecutor. "
+            "Supported: 'router', 'magentic'. For others, register your graph manually "
+            "via LangGraphEngine."
+        )
 
+    def _compile_router(self, state_schema: type) -> Any:
+        """Build the router pattern: [pre-steps] → classify → specialist → END."""
         agents = {a.name: a for a in self._manifest.agents}
         classifier_name = self._manifest.classifier_agent
 
@@ -142,9 +149,63 @@ class ManifestExecutor:
 
         self._compiled = graph.compile()
         logger.info(
-            "ManifestExecutor compiled '%s' (%s pattern, %d agents, %d pre-steps)",
-            self._manifest.app_id, self._manifest.pattern,
-            len(self._manifest.agents), len(self._pre_steps),
+            "ManifestExecutor compiled '%s' (router pattern, %d agents, %d pre-steps)",
+            self._manifest.app_id, len(self._manifest.agents), len(self._pre_steps),
+        )
+        return self._compiled
+
+    def _compile_magentic(self, state_schema: type) -> Any:
+        """Build the magentic pattern: [pre-steps] → intent_classify → dispatch → merge → END."""
+        agents = {a.name: a for a in self._manifest.agents}
+        classifier_name = self._manifest.classifier_agent
+
+        if classifier_name not in agents:
+            raise ValueError(
+                f"classifier_agent '{classifier_name}' not found in manifest agents: "
+                f"{list(agents.keys())}"
+            )
+
+        classifier_cfg = agents[classifier_name]
+
+        # Eligible specialists: explicit intent_agents list, or all non-classifier agents
+        intent_names = self._manifest.intent_agents or [
+            k for k in agents if k != classifier_name
+        ]
+        specialists_cfg = {k: agents[k] for k in intent_names if k in agents}
+        categories = list(specialists_cfg.keys())
+
+        graph = StateGraph(state_schema)
+
+        # ── Pre-steps ──────────────────────────────────────────────
+        prev: str | None = None
+        for step_name, step_fn in self._pre_steps:
+            graph.add_node(step_name, step_fn)
+            if prev is None:
+                graph.set_entry_point(step_name)
+            else:
+                graph.add_edge(prev, step_name)
+            prev = step_name
+
+        # ── Intent classifier ──────────────────────────────────────
+        graph.add_node("intent_classify", self._make_intent_classifier_node(classifier_cfg, categories))
+        if prev:
+            graph.add_edge(prev, "intent_classify")
+        else:
+            graph.set_entry_point("intent_classify")
+
+        # ── Dispatch (parallel specialist execution) ───────────────
+        graph.add_node("dispatch", self._make_dispatch_node(specialists_cfg))
+        graph.add_edge("intent_classify", "dispatch")
+
+        # ── Merge ──────────────────────────────────────────────────
+        graph.add_node("merge", self._make_merge_node())
+        graph.add_edge("dispatch", "merge")
+        graph.add_edge("merge", END)
+
+        self._compiled = graph.compile()
+        logger.info(
+            "ManifestExecutor compiled '%s' (magentic pattern, %d intent agents, %d pre-steps)",
+            self._manifest.app_id, len(specialists_cfg), len(self._pre_steps),
         )
         return self._compiled
 
@@ -212,10 +273,12 @@ class ManifestExecutor:
         lf_trace = self._active_traces.pop(trace_id, None)
         if lf_trace:
             try:
+                # router uses 'route'; magentic uses 'intents' — include whichever is present
+                category = final_state.get("route") or final_state.get("intents")
                 lf_trace.update(
                     output=final_state.get("output", ""),
                     metadata={
-                        "category": final_state.get("route"),
+                        "category": category,
                         "hitl": final_state.get("hitl_required", False),
                         "policy_flags": final_state.get("policy_flags", []),
                     },
@@ -352,6 +415,224 @@ class ManifestExecutor:
             return result
 
         return node_specialist
+
+    def _make_intent_classifier_node(self, cfg: AgentConfig, categories: list[str]) -> Callable:
+        """Return an async node that detects ALL matching intents (magentic pattern).
+
+        The system prompt should instruct the LLM to return a comma-separated list.
+        Falls back to [categories[-1]] when no valid intent is detected.
+        """
+        llm = self._llm
+        executor = self
+
+        categories_text = "\n".join(f"  {c}" for c in categories)
+
+        async def node_intent_classify(state: dict) -> dict:
+            system_prompt = cfg.system_prompt.replace("{categories}", categories_text)
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": state["input"]},
+            ]
+
+            lf_trace = executor.get_trace(state.get("trace_id", ""))
+            lf_gen = None
+            if lf_trace:
+                try:
+                    lf_gen = lf_trace.generation(
+                        name="intent_classify",
+                        model=getattr(llm, "default_model", cfg.model),
+                        input=messages,
+                        metadata={"categories": categories, **cfg.trace_metadata},
+                    )
+                except Exception:
+                    pass
+
+            resp = await llm.complete(messages=messages, temperature=cfg.temperature)
+
+            # Parse comma-separated list; keep only known categories
+            raw_parts = [p.strip().lower().replace(" ", "_") for p in resp.content.split(",")]
+            intents = [p for p in raw_parts if p in categories]
+            if not intents:
+                intents = [categories[-1]]
+
+            if lf_gen:
+                try:
+                    lf_gen.end(
+                        output=intents,
+                        usage={
+                            "input": resp.usage.get("input_tokens", 0),
+                            "output": resp.usage.get("output_tokens", 0),
+                        },
+                    )
+                except Exception:
+                    pass
+
+            return {
+                "intents": intents,
+                "messages": state.get("messages", []) + [
+                    {"role": "intent_classifier", "content": ", ".join(intents)}
+                ],
+            }
+
+        return node_intent_classify
+
+    def _make_dispatch_node(self, specialists_cfg: dict[str, AgentConfig]) -> Callable:
+        """Return an async node that runs all detected specialists concurrently.
+
+        Uses asyncio.gather for true parallel execution. Merges HITL flags and
+        policy_flags from all specialists. Returns specialist_outputs dict.
+        """
+        executor = self
+
+        async def _run_one(state: dict, cfg: AgentConfig) -> dict:
+            """Run a single specialist and return its result dict."""
+            parts: list[str] = []
+            ctx = state.get("_context", "")
+            if ctx:
+                parts.append(ctx)
+            parts.append(cfg.system_prompt)
+            if cfg.sop:
+                parts.append(f"SOP YOU MUST FOLLOW:\n{cfg.sop}")
+            system_prompt = "\n\n".join(parts)
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": state["input"]},
+            ]
+
+            lf_trace = executor.get_trace(state.get("trace_id", ""))
+            lf_gen = None
+            if lf_trace:
+                try:
+                    lf_gen = lf_trace.generation(
+                        name=f"specialist-{cfg.name}",
+                        model=getattr(executor._llm, "default_model", cfg.model),
+                        input=messages,
+                        metadata={
+                            "category": cfg.name,
+                            "sop_applied": bool(cfg.sop),
+                            "pattern": "magentic",
+                            **cfg.trace_metadata,
+                        },
+                    )
+                except Exception:
+                    pass
+
+            resp = await executor._llm.complete(messages=messages, temperature=cfg.temperature)
+
+            if lf_gen:
+                try:
+                    lf_gen.end(
+                        output=resp.content,
+                        usage={
+                            "input": resp.usage.get("input_tokens", 0),
+                            "output": resp.usage.get("output_tokens", 0),
+                        },
+                    )
+                except Exception:
+                    pass
+
+            result: dict = {"output": resp.content, "hitl_required": False, "policy_flags": []}
+
+            if cfg.hitl_condition:
+                try:
+                    tp = state.get("taxpayer")
+                    hitl = bool(eval(  # noqa: S307 — developer-authored manifest config only
+                        cfg.hitl_condition,
+                        {"__builtins__": _EVAL_BUILTINS},
+                        {"state": state, "taxpayer": tp, "output": resp.content},
+                    ))
+                    if hitl:
+                        result["hitl_required"] = True
+                        result["policy_flags"].append(
+                            f"HITL_REQUIRED: agent={cfg.name} condition=({cfg.hitl_condition})"
+                        )
+                        logger.info(
+                            "HITL triggered for agent '%s' (trace %s)",
+                            cfg.name, state.get("trace_id", "?"),
+                        )
+                except Exception:
+                    logger.warning(
+                        "hitl_condition eval failed for agent '%s'", cfg.name, exc_info=True
+                    )
+
+            return result
+
+        async def node_dispatch(state: dict) -> dict:
+            intents = state.get("intents", [])
+            valid = [i for i in intents if i in specialists_cfg]
+            if not valid:
+                valid = [list(specialists_cfg.keys())[-1]]
+
+            results = await asyncio.gather(*[_run_one(state, specialists_cfg[name]) for name in valid])
+
+            specialist_outputs = {name: r["output"] for name, r in zip(valid, results)}
+            hitl_required = any(r["hitl_required"] for r in results)
+
+            all_flags = list(state.get("policy_flags", []))
+            for r in results:
+                all_flags.extend(r["policy_flags"])
+
+            return {
+                "specialist_outputs": specialist_outputs,
+                "intents": valid,
+                "hitl_required": hitl_required,
+                "policy_flags": all_flags,
+                "messages": state.get("messages", []) + [
+                    {"role": "dispatch", "content": f"Dispatched to: {', '.join(valid)}"}
+                ],
+            }
+
+        return node_dispatch
+
+    def _make_merge_node(self) -> Callable:
+        """Return an async node that merges specialist outputs into a single reply.
+
+        For a single intent, returns that specialist's output directly.
+        For multiple intents, calls the LLM to synthesise a unified reply.
+        """
+        llm = self._llm
+
+        async def node_merge(state: dict) -> dict:
+            specialist_outputs: dict = state.get("specialist_outputs", {})
+
+            if len(specialist_outputs) == 0:
+                output = state.get("output", "")
+            elif len(specialist_outputs) == 1:
+                output = next(iter(specialist_outputs.values()))
+            else:
+                sections = "\n\n".join(
+                    f"--- {name.replace('_', ' ').title()} Specialist Response ---\n{text}"
+                    for name, text in specialist_outputs.items()
+                )
+                merge_messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a senior tax authority officer finalising a reply email. "
+                            "You have received specialist responses for multiple parts of one "
+                            "taxpayer enquiry. Combine them into a single, coherent, professional "
+                            "reply email. Do not repeat information. Address each point clearly. "
+                            "Keep the total reply under 350 words."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Original email:\n{state.get('input', '')}\n\n"
+                            f"Specialist responses to combine:\n{sections}"
+                        ),
+                    },
+                ]
+                resp = await llm.complete(messages=merge_messages, temperature=0.1)
+                output = resp.content
+
+            return {
+                "output": output,
+                "messages": state.get("messages", []) + [{"role": "merge", "content": output}],
+            }
+
+        return node_merge
 
     # ── Convenience constructor ─────────────────────────────────────
 

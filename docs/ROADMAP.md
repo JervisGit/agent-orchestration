@@ -17,12 +17,18 @@
 
 - ADR-007: config-driven agents decision
 - `AgentConfig`: add `sop`, `hitl_condition`, `trace_metadata` fields
-- `AppManifest`: add `pattern`, `classifier_agent` fields
+- `AppManifest`: add `pattern`, `classifier_agent`, `intent_agents` fields
 - `ManifestExecutor`: reads `ao-manifest.yaml`, builds the LangGraph graph, manages
   Langfuse trace lifecycle — apps never import `StateGraph` or `END`
+  - `router` pattern: classify → one specialist → END
+  - `magentic` pattern: detect all intents → parallel dispatch via `asyncio.gather`
+    → LLM merge → END (multi-intent emails get full coverage from every specialist)
+- Pattern library: `router`, `linear`, `supervisor`, `planner`, `magentic`
 - Email assistant refactored: `app.py` uses `ManifestExecutor`; LangGraph dependency
   isolated entirely inside `ao-core`
 - `ao-manifest.yaml`: full declaration of 5 specialist agents with SOPs + policies
+- Sample emails updated: em-006 (Fatimah penalty waiver → HITL demo),
+  em-007 (multi-intent filing + payment → magentic pattern demo)
 
 ## Phase 3 — Production Readiness
 *Goal: safe to deploy, observable in Azure.*

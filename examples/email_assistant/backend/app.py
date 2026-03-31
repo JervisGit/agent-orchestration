@@ -95,11 +95,14 @@ executor = ManifestExecutor(manifest, llm=llm, langfuse_client=langfuse_client)
 STEP_LABELS: dict[str, str] = {
     "lookup_taxpayer":     "Looking up taxpayer record in database",
     "classify":            "Classifying email category",
+    "intent_classify":     "Detecting all intents in this email",
     "filing_extension":    "Filing Extension agent drafting reply",
     "payment_arrangement": "Payment Arrangement agent reviewing case",
     "assessment_relief":   "Assessment Relief agent reviewing objection",
     "penalty_waiver":      "Penalty Waiver agent checking penalty history",
     "general_inquiry":     "General Inquiry agent composing response",
+    "dispatch":            "Running specialist agents in parallel",
+    "merge":               "Synthesising specialist responses into one reply",
     "policy_check":        "Applying guardrail policies",
 }
 
@@ -126,7 +129,9 @@ class TaxEmailState(TypedDict):
     sender: str
     subject: str
     input: str              # full email text
-    route: str              # category chosen by classifier
+    route: str              # category chosen by classifier (router pattern)
+    intents: list[str]      # detected intents (magentic pattern)
+    specialist_outputs: dict  # per-specialist reply text (magentic pattern)
     messages: list[dict]
     output: str             # draft reply
     taxpayer: dict | None   # row from taxpayers table (or None if not found)
@@ -285,6 +290,45 @@ SAMPLE_EMAILS = [
         ),
         "status": "new", "category": None, "draft_reply": None, "policy_flags": [],
     },
+    {
+        "id": "em-006",
+        "from": "fatimah.h@gmail.com",
+        "subject": "Penalty Waiver Request — SG-T008-5594",
+        "body": (
+            "Dear IRAS,\n\n"
+            "I am writing to request a full waiver of the three late-filing penalties "
+            "on my account. I have been dealing with a serious family illness over the "
+            "past two years which disrupted my financial management. I have now settled "
+            "the full outstanding tax balance of SGD 6,700 and am requesting compassionate "
+            "consideration for the penalties.\n\n"
+            "My TIN is SG-T008-5594.\n\n"
+            "Thank you,\nFatimah bte Hassan"
+        ),
+        # penalty_count=3 on this account → hitl_condition fires → supervisor approval required
+        "status": "new", "category": None, "draft_reply": None, "policy_flags": [],
+    },
+    {
+        "id": "em-007",
+        "from": "john.tan@example.com",
+        "subject": "Filing Extension and Payment Plan Request — SG-T001-2890",
+        "body": (
+            "Dear Tax Authority,\n\n"
+            "I need to raise two matters regarding my YA 2024 assessment "
+            "(TIN: SG-T001-2890).\n\n"
+            "First, I am requesting a 30-day filing extension. I was hospitalised "
+            "for two weeks and cannot compile my documents before the 15 April 2026 "
+            "deadline.\n\n"
+            "Second, I would also like to arrange a payment plan for the estimated "
+            "outstanding tax of SGD 8,500 spread over 12 monthly instalments, as I "
+            "anticipate cashflow difficulties following my medical expenses.\n\n"
+            "Could you please address both matters?\n\n"
+            "Regards,\nJohn Tan Wei Ming"
+        ),
+        # Two distinct intents: filing_extension + payment_arrangement.
+        # With the 'router' pattern the classifier picks ONE intent and the second
+        # is left unanswered — this demonstrates why the 'magentic' pattern exists.
+        "status": "new", "category": None, "draft_reply": None, "policy_flags": [],
+    },
 ]
 
 emails_db: dict[str, dict] = {e["id"]: dict(e) for e in SAMPLE_EMAILS}
@@ -375,7 +419,8 @@ async def process_email_stream(email_id: str):
 
         initial_state: TaxEmailState = {
             "email_id": email_id, "sender": email["from"], "subject": email["subject"],
-            "input": full_text, "route": "", "messages": [], "output": "",
+            "input": full_text, "route": "", "intents": [], "specialist_outputs": {},
+            "messages": [], "output": "",
             "taxpayer": None, "_context": "", "trace_id": trace_id,
             "policy_flags": [], "hitl_required": False,
         }
@@ -469,7 +514,8 @@ async def process_email(email_id: str) -> ProcessResult:
     full_text = f"From: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"
     initial_state: TaxEmailState = {
         "email_id": email_id, "sender": email["from"], "subject": email["subject"],
-        "input": full_text, "route": "", "messages": [], "output": "",
+        "input": full_text, "route": "", "intents": [], "specialist_outputs": {},
+        "messages": [], "output": "",
         "taxpayer": None, "_context": "", "trace_id": trace_id,
         "policy_flags": [], "hitl_required": False,
     }
