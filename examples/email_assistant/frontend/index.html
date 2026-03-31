@@ -285,6 +285,44 @@
       margin-top: 16px;
     }
 
+    .progress-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .progress-panel-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text2);
+      margin-bottom: 12px;
+    }
+    .progress-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 7px 0;
+      font-size: 13px;
+      border-bottom: 1px solid rgba(63,63,70,0.4);
+    }
+    .progress-step:last-child { border-bottom: none; }
+    .step-icon { width: 18px; flex-shrink: 0; text-align: center; }
+    .step-detail { font-size: 11px; color: var(--accent); margin-top: 2px; }
+    .langfuse-link {
+      display: inline-block;
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--accent2);
+      text-decoration: none;
+      border: 1px solid rgba(129,140,248,0.3);
+      border-radius: 6px;
+      padding: 3px 10px;
+    }
+    .langfuse-link:hover { background: rgba(129,140,248,0.1); }
+
     .spinner {
       display: inline-block;
       width: 14px;
@@ -420,6 +458,18 @@
         </div>
       `;
 
+      if (e.status === 'processing') {
+        html += `
+          <div class="progress-panel" id="progress-${e.id}">
+            <div class="progress-panel-label">⚙️ Agent Workflow Progress</div>
+            <div class="progress-step step-processing">
+              <span class="step-icon"><span class="spinner"></span></span>
+              <div class="step-label" style="color:var(--text2)">Initializing...</div>
+            </div>
+          </div>
+        `;
+      }
+
       if (e.draft_reply) {
         html += `
           <div class="section reply-section">
@@ -442,20 +492,95 @@
       detail.innerHTML = html;
     }
 
-    async function processOne(id) {
-      const e = emails.find(x => x.id === id);
-      if (e) e.status = 'processing';
+    function processOne(id) {
+      const email = emails.find(x => x.id === id);
+      if (!email || email.status !== 'new') return;
+
+      email.status = 'processing';
       renderList();
-      showDetail(id);
+      showDetail(id);  // renders empty progress-panel div
 
-      try {
-        const result = await fetchJSON(`/emails/${id}/process`, { method: 'POST' });
-        showToast(`Classified as "${formatCat(result.category)}" ✓`);
-      } catch (err) {
-        showToast(`Error: ${err.message}`, true);
-      }
+      const source = new EventSource(`${API}/emails/${id}/process/stream`);
 
-      await refreshEmails();
+      source.onmessage = function(event) {
+        let data; try { data = JSON.parse(event.data); } catch { return; }
+        const panel = document.getElementById(`progress-${id}`);
+
+        if (data.type === 'step') {
+          // Remove "Waiting..." spinner
+          panel?.querySelector('.step-processing')?.remove();
+
+          let detailHtml = '';
+          const d = data.detail || {};
+          if (d.taxpayer_found === true && d.taxpayer_name)
+            detailHtml = `<div class="step-detail">→ ${esc(d.taxpayer_name)} · ${esc(d.taxpayer_id)}</div>`;
+          else if (d.taxpayer_found === false)
+            detailHtml = `<div class="step-detail" style="color:var(--yellow)">→ No taxpayer record found</div>`;
+          else if (d.category)
+            detailHtml = `<div class="step-detail">→ ${formatCat(d.category)}</div>`;
+
+          if (panel) {
+            const el = document.createElement('div');
+            el.className = 'progress-step';
+            el.innerHTML = `
+              <span class="step-icon" style="color:var(--green)">✓</span>
+              <div><div class="step-label">${esc(data.label)}</div>${detailHtml}</div>
+            `;
+            panel.appendChild(el);
+            if (data.node !== 'policy_check') {
+              const spin = document.createElement('div');
+              spin.className = 'progress-step step-processing';
+              spin.innerHTML = `<span class="step-icon"><span class="spinner"></span></span><div class="step-label" style="color:var(--text2)">Waiting for next step...</div>`;
+              panel.appendChild(spin);
+            }
+          }
+
+        } else if (data.type === 'complete') {
+          source.close();
+          const r = data.result;
+          const e = emails.find(x => x.id === id);
+          if (e) {
+            e.status = 'processed'; e.category = r.category;
+            e.draft_reply = r.draft_reply; e.policy_flags = r.policy_flags || [];
+            e.hitl_required = r.hitl_required;
+          }
+          // After brief pause, refresh from server and re-render
+          setTimeout(() => {
+            refreshEmails().then(() => {
+              showDetail(id);
+              showToast(`Classified as "${formatCat(r.category)}" ✓`);
+              if (r.langfuse_url) {
+                const detail = document.getElementById('email-detail');
+                const lf = document.createElement('a');
+                lf.href = r.langfuse_url; lf.target = '_blank';
+                lf.className = 'langfuse-link';
+                lf.textContent = '🔍 View trace in Langfuse';
+                detail.querySelector('.reply-section')?.after(lf);
+              }
+            });
+          }, 600);
+
+        } else if (data.type === 'error') {
+          source.close();
+          panel?.querySelector('.step-processing')?.remove();
+          if (panel) {
+            const el = document.createElement('div');
+            el.className = 'progress-step';
+            el.innerHTML = `<span class="step-icon" style="color:var(--red)">✗</span><div class="step-label" style="color:var(--red)">${esc(data.message)}</div>`;
+            panel.appendChild(el);
+          }
+          const e = emails.find(x => x.id === id);
+          if (e) e.status = 'new';
+          renderList();
+        }
+      };
+
+      source.onerror = function() {
+        source.close();
+        const e = emails.find(x => x.id === id);
+        if (e && e.status === 'processing') { e.status = 'new'; renderList(); showDetail(id); }
+        showToast('Stream connection lost', true);
+      };
     }
 
     async function processAll() {

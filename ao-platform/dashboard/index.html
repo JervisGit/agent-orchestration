@@ -189,8 +189,31 @@
     }
     .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
 
-    /* Empty state */
-    .empty-state {
+    /* Trace timeline */
+    .trace-row { cursor: pointer; }
+    .trace-row:hover { background: var(--surface2); }
+    .trace-detail {
+      padding: 16px 18px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+    }
+    .tl { display: flex; flex-direction: column; gap: 0; }
+    .tl-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(63,63,70,0.4);
+      font-size: 13px;
+    }
+    .tl-step:last-child { border-bottom: none; }
+    .tl-icon { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; margin-top: 1px; }
+    .tl-icon.green { background: rgba(34,197,94,0.2); color: var(--green); }
+    .tl-icon.blue  { background: rgba(59,130,246,0.2); color: var(--blue); }
+    .tl-icon.red   { background: rgba(239,68,68,0.2); color: var(--red); }
+    .tl-icon.yellow{ background: rgba(234,179,8,0.2); color: var(--yellow); }
+    .tl-label { font-weight: 500; }
+    .tl-meta  { font-size: 11px; color: var(--text2); margin-top: 2px; }
       text-align: center;
       padding: 48px;
       color: var(--text2);
@@ -227,6 +250,7 @@
       <div class="nav-item" data-page="hitl" onclick="showPage('hitl')">✋ HITL Approvals</div>
       <div class="nav-item" data-page="policies" onclick="showPage('policies')">🛡️ Policies</div>
       <div class="nav-item" data-page="apps" onclick="showPage('apps')">📦 DSAI Apps</div>
+      <div class="nav-item" data-page="traces" onclick="showPage('traces')">🔍 Traces</div>
     </div>
 
     <div class="main">
@@ -350,6 +374,26 @@
           </div>
         </div>
       </div>
+
+      <!-- TRACES -->
+      <div id="page-traces" class="hidden">
+        <div class="page-header">
+          <div class="page-title">Traces</div>
+          <div class="page-subtitle">Per-email processing traces from the Tax Email Assistant
+            — <a href="http://localhost:3000" target="_blank" style="color:var(--accent2);text-decoration:none">Open Langfuse ↗</a>
+          </div>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead><tr>
+              <th>Timestamp</th><th>Email ID</th><th>Category</th>
+              <th>Taxpayer</th><th>Policies</th><th>HITL</th><th>Trace</th>
+            </tr></thead>
+            <tbody id="traces-table-body"></tbody>
+          </table>
+          <div id="traces-empty" class="empty-state">No traces yet. Process an email in the Tax Email Assistant first.</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -430,10 +474,11 @@
       document.getElementById(`page-${page}`).classList.remove('hidden');
       document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
       document.querySelector(`.nav-item[data-page="${page}"]`).classList.add('active');
-      if (page === 'overview') loadOverview();
+      if (page === 'overview')  loadOverview();
       if (page === 'workflows') loadWorkflows();
-      if (page === 'hitl') loadHITL();
-      if (page === 'policies') loadPolicies();
+      if (page === 'hitl')      loadHITL();
+      if (page === 'policies')  loadPolicies();
+      if (page === 'traces')    loadTraces();
     }
 
     // ── API helpers ────────────────────────────────────────
@@ -614,7 +659,132 @@
       loadPolicies();
     }
 
-    // ── Utils ──────────────────────────────────────────────
+    // ── Traces ─────────────────────────────────────────────
+    const EMAIL_ASSISTANT_URL = 'http://localhost:8001';
+    const LANGFUSE_URL = 'http://localhost:3000';
+
+    const STEP_ICONS = {
+      lookup_taxpayer: { icon: '🗄', cls: 'blue',   label: 'DB lookup' },
+      classify:        { icon: '🧠', cls: 'blue',   label: 'Classify' },
+      filing_extension:    { icon: '📋', cls: 'green', label: 'Filing Extension agent' },
+      payment_arrangement: { icon: '💳', cls: 'green', label: 'Payment Arrangement agent' },
+      assessment_relief:   { icon: '⚖️', cls: 'green', label: 'Assessment Relief agent' },
+      penalty_waiver:      { icon: '🔖', cls: 'green', label: 'Penalty Waiver agent' },
+      general_inquiry:     { icon: '💬', cls: 'green', label: 'General Inquiry agent' },
+      policy_check:        { icon: '🛡', cls: 'yellow', label: 'Policy check' },
+    };
+
+    let _tracesExpanded = new Set();
+
+    async function loadTraces() {
+      let entries = [];
+      try {
+        const data = await fetch(`${EMAIL_ASSISTANT_URL}/api/log`).then(r => r.json());
+        entries = (data.entries || []).reverse(); // newest first
+      } catch {
+        document.getElementById('traces-empty').textContent =
+          'Could not reach Tax Email Assistant at ' + EMAIL_ASSISTANT_URL + '. Is it running?';
+        return;
+      }
+
+      const tbody = document.getElementById('traces-table-body');
+      const empty = document.getElementById('traces-empty');
+      if (entries.length === 0) { tbody.innerHTML = ''; empty.classList.remove('hidden'); return; }
+      empty.classList.add('hidden');
+
+      tbody.innerHTML = entries.map(t => {
+        const ts = new Date(t.timestamp).toLocaleString();
+        const catBadge = t.category
+          ? `<span class="badge badge-${catColor(t.category)}">${fmtCat(t.category)}</span>` : '—';
+        const taxpayer = t.taxpayer_found
+          ? `<span style="color:var(--text)">${esc(t.taxpayer_name || t.taxpayer_id || '?')}</span>`
+          : `<span style="color:var(--text2)">Not found</span>`;
+        const flags = t.policy_flags?.length
+          ? `<span class="badge badge-yellow">${t.policy_flags.length} flag${t.policy_flags.length>1?'s':''}</span>`
+          : `<span class="badge badge-neutral">None</span>`;
+        const hitl = t.hitl_required
+          ? `<span class="badge badge-red">Required</span>`
+          : `<span class="badge badge-neutral">—</span>`;
+        const lf = t.langfuse_url
+          ? `<a href="${esc(t.langfuse_url)}" target="_blank" style="color:var(--accent2);font-size:12px">Langfuse ↗</a>`
+          : `<span style="color:var(--text2);font-size:12px">${esc(t.trace_id?.slice(0,8))}...</span>`;
+
+        const expanded = _tracesExpanded.has(t.trace_id);
+        const stepRows = expanded ? renderTraceDetail(t) : '';
+
+        return `<tr class="trace-row" onclick="toggleTrace('${esc(t.trace_id)}')">
+          <td style="font-size:12px;color:var(--text2)">${ts}</td>
+          <td style="font-family:monospace;font-size:12px">${esc(t.email_id)}</td>
+          <td>${catBadge}</td>
+          <td>${taxpayer}</td>
+          <td>${flags}</td>
+          <td>${hitl}</td>
+          <td>${lf}</td>
+        </tr>${stepRows}`;
+      }).join('');
+    }
+
+    function renderTraceDetail(t) {
+      const nodes = t.graph_nodes_visited || [];
+      const allSteps = ['lookup_taxpayer', 'classify', ...nodes.filter(n => n === 'agent' ? false : STEP_ICONS[n]), 'policy_check'];
+      // Build timeline from nodes visited
+      const steps = [];
+      if (t.taxpayer_found !== undefined)
+        steps.push({ key: 'lookup_taxpayer', meta: t.taxpayer_found ? `Taxpayer: ${t.taxpayer_name || t.taxpayer_id}` : 'No record found' });
+      if (t.category)
+        steps.push({ key: 'classify', meta: `→ ${fmtCat(t.category)}` });
+      if (t.category && STEP_ICONS[t.category])
+        steps.push({ key: t.category, meta: 'Draft reply generated' });
+      steps.push({ key: 'policy_check', meta: t.policy_flags?.length ? t.policy_flags.join('; ') : 'No flags' });
+
+      const tl = steps.map(s => {
+        const si = STEP_ICONS[s.key] || { icon: '⚙', cls: 'blue', label: s.key };
+        return `<div class="tl-step">
+          <div class="tl-icon ${si.cls}">${si.icon}</div>
+          <div><div class="tl-label">${si.label}</div><div class="tl-meta">${esc(s.meta)}</div></div>
+        </div>`;
+      }).join('');
+
+      const policyRows = (t.policy_flags || []).map(f =>
+        `<div style="font-size:12px;color:var(--yellow);padding:2px 0">⚠️ ${esc(f)}</div>`
+      ).join('');
+
+      const taxpayerInfo = t.taxpayer_found
+        ? `<strong>${esc(t.taxpayer_name || '?')}</strong> &middot; TIN: ${esc(t.taxpayer_id || '?')}`
+        : '<em style="color:var(--text2)">No taxpayer record found</em>';
+
+      return `<tr><td colspan="7" style="padding:0">
+        <div class="trace-detail">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div>
+              <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Agent Steps</div>
+              <div class="tl">${tl}</div>
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Taxpayer</div>
+              <div style="font-size:13px;margin-bottom:12px">${taxpayerInfo}</div>
+              <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Policy Flags</div>
+              ${policyRows || '<div style="font-size:12px;color:var(--text2)">None</div>'}
+              <div style="margin-top:12px;font-size:11px;color:var(--text2)">Trace ID: <code>${esc(t.trace_id)}</code></div>
+            </div>
+          </div>
+        </div>
+      </td></tr>`;
+    }
+
+    function toggleTrace(traceId) {
+      if (_tracesExpanded.has(traceId)) _tracesExpanded.delete(traceId);
+      else _tracesExpanded.add(traceId);
+      loadTraces();
+    }
+
+    function catColor(c) {
+      return { filing_extension:'blue', payment_arrangement:'orange', assessment_relief:'purple',
+               penalty_waiver:'red', general_inquiry:'green' }[c] || 'neutral';
+    }
+    function fmtCat(c) { return c ? c.replace(/_/g,' ').replace(/\b\w/g,x=>x.toUpperCase()) : ''; }
+
+    // ── Misc utils ─────────────────────────────────────────
     function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
     function esc(str) {
       const div = document.createElement('div');
