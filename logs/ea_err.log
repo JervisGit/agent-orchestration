@@ -9,3 +9,21 @@ INFO:     Shutting down
 INFO:     Waiting for application shutdown.
 INFO:     Application shutdown complete.
 INFO:     Finished server process [5728]
+INFO:     Started server process [17596]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'examples\email_assistant\backend\app.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [17596]
+Exception ignored in atexit callback <bound method PromptCacheTaskManager.shutdown of <langfuse.prompt_cache.PromptCacheTaskManager object at 0x00000214D7A42CF0>>:
+Traceback (most recent call last):
+  File "c:\Users\Jervis\Documents\Projects\agent-orchestration\.venv\Lib\site-packages\langfuse\prompt_cache.py", line 123, in shutdown
+    consumer.join()
+  File "C:\Users\Jervis\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1094, in join
+    self._handle.join(timeout)
+KeyboardInterrupt: 
+INFO:     Started server process [3464]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.

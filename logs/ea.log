@@ -2,4 +2,13 @@ Tax Email Assistant ready — LLM: OpenAIProvider, DB: connected, Langfuse: connec
 INFO:     127.0.0.1:57402 - "GET /api/emails HTTP/1.1" 200 OK
 INFO:     127.0.0.1:58834 - "GET /api/emails/em-001/process/stream HTTP/1.1" 200 OK
 INFO:     127.0.0.1:65358 - "GET /api/emails/em-001/process/stream HTTP/1.1" 200 OK
+ Tax Email Assistant ready — LLM: OpenAIProvider, DB: connected, Langfuse: connected
+INFO:     127.0.0.1:58987 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58987 - "GET /api/emails HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58987 - "GET /api/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58042 - "GET /api/emails/em-001/process/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61413 - "GET /api/emails HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61413 - "GET /api/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54982 - "GET /api/log HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54982 - "GET /api/log HTTP/1.1" 200 OK
  

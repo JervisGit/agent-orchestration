@@ -42,6 +42,15 @@ class AgentConfig:
     tools: list[str] = field(default_factory=list)  # References to tool names
     temperature: float = 0.0
     max_tokens: int | None = None
+    # Standard Operating Procedure injected into this agent's system prompt
+    sop: str = ""
+    # Python expression evaluated against state after the agent runs.
+    # If truthy, sets state["hitl_required"] = True.
+    # Namespace: {"state": state, "taxpayer": state.get("taxpayer"), "output": state.get("output")}
+    # Example: "taxpayer and taxpayer.get('penalty_count', 0) >= 3"
+    hitl_condition: str | None = None
+    # Arbitrary key/value pairs attached to this agent's Langfuse generation as metadata
+    trace_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -51,6 +60,11 @@ class AppManifest:
     app_id: str
     display_name: str
     description: str = ""
+
+    # Workflow pattern: "router" | "linear" | "supervisor" | "planner"
+    pattern: str = "router"
+    # Name of the agent that classifies/routes (used by ManifestExecutor for router pattern)
+    classifier_agent: str = "classifier"
 
     # Identity
     identity_mode: IdentityMode = IdentityMode.SERVICE
@@ -90,6 +104,8 @@ class AppManifest:
             app_id=data["app_id"],
             display_name=data.get("display_name", data["app_id"]),
             description=data.get("description", ""),
+            pattern=data.get("pattern", "router"),
+            classifier_agent=data.get("classifier_agent", "classifier"),
             identity_mode=IdentityMode(data.get("identity_mode", "service")),
             service_principal_id=data.get("service_principal_id"),
             agents=agents,

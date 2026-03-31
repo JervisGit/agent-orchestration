@@ -1,63 +1,149 @@
-# Email Assistant — AO App Manifest
-# This file registers the email assistant with the AO layer.
-# App team edits this file to configure agents, tools, identity, and policies.
-# No code changes to AO required.
+# Tax Email Assistant � AO App Manifest
+# Declares agents, SOPs, tools, and policies.
+# ManifestExecutor reads this file and builds the LangGraph automatically.
+# App code (app.py) only needs: DB lookup node, state schema, FastAPI routes.
 
 app_id: email_assistant
-display_name: Email Assistant
-description: Processes inbound external emails and drafts responses
+display_name: Tax Email Assistant
+description: >
+  Classifies inbound taxpayer emails, looks up the taxpayer record from
+  PostgreSQL, routes to a specialist agent with SOP-grounded prompts,
+  enforces guardrail policies, and drafts a professional reply.
 
-# Identity — service identity because it processes external users' emails,
-# not acting on behalf of a logged-in user.
 identity_mode: service
-service_principal_id: ${EMAIL_ASSISTANT_SP_CLIENT_ID}
 
-# LLM — uses shared AO endpoint (app doesn't need its own)
-llm_endpoint: ${AZURE_OPENAI_ENDPOINT}
-llm_api_key_secret: azure-openai-api-key  # Key Vault secret name
+# -- Workflow -----------------------------------------------------------
+pattern: router
+classifier_agent: classifier
 
-# Observability — isolated Langfuse project for this app's traces
+# -- Observability ------------------------------------------------------
 langfuse_project: email-assistant
 
-# Agents
+# -- Agents ------------------------------------------------------------
 agents:
-  - name: email_classifier
+
+  - name: classifier
     system_prompt: |
-      You are an email classification agent. Classify incoming emails into
-      categories: urgent, billing, support, general. Return only the category.
-    model: gpt-4o-mini
-    tools: []
+      You are a tax authority email triage classifier.
+      Classify the email into exactly ONE of:
+      {categories}
+      Reply with ONLY the category name. Nothing else.
+    model: gpt-4.1-mini
     temperature: 0.0
 
-  - name: reply_drafter
+  - name: filing_extension
     system_prompt: |
-      You are a professional email reply drafter. Given an email and its
-      classification, draft an appropriate reply. Be concise and professional.
-    model: gpt-4o
-    tools:
-      - knowledge_base
-    temperature: 0.3
+      You are a tax authority officer handling filing extension cases.
+      Draft a professional reply email. Address the taxpayer by name.
+      Follow the SOP strictly - do not invent policies.
+      Keep the reply under 200 words.
+    model: gpt-4.1-mini
+    temperature: 0.2
+    trace_metadata:
+      division: Filing
+    sop: |
+      STANDARD OPERATING PROCEDURE - Filing Extension Request
+      1. Extension must be requested BEFORE the original filing deadline.
+      2. Maximum extension granted: 30 calendar days per tax year.
+      3. Only ONE extension per tax year per taxpayer is permitted.
+      4. Individuals use Form B-Ext; Corporations use Form C-Ext.
+      5. Late requests (after deadline) require documented grounds
+         (hospitalisation, natural disaster).
+      6. Acknowledge the request, state the decision/next steps,
+         and provide the form reference.
 
-# Tools
+  - name: payment_arrangement
+    system_prompt: |
+      You are a tax authority officer handling payment arrangement cases.
+      Draft a professional reply email. Address the taxpayer by name.
+      Follow the SOP strictly - do not invent policies.
+      Keep the reply under 200 words.
+    model: gpt-4.1-mini
+    temperature: 0.2
+    trace_metadata:
+      division: Collections
+    sop: |
+      STANDARD OPERATING PROCEDURE - Payment Arrangement
+      1. Confirm the outstanding balance from the taxpayer record before responding.
+      2. Maximum instalment plan duration: 12 months.
+      3. Minimum monthly instalment: SGD 100.
+      4. If an ACTIVE plan already exists, offer to amend it - do not create a second plan.
+      5. Interest accrues at 1.5% per month on the remaining balance during the arrangement.
+      6. Include a payment reference and remind the taxpayer to retain all receipts.
+
+  - name: assessment_relief
+    system_prompt: |
+      You are a tax authority officer handling assessment objection cases.
+      Draft a professional reply email. Address the taxpayer by name.
+      Follow the SOP strictly - do not invent policies.
+      Keep the reply under 200 words.
+    model: gpt-4.1-mini
+    temperature: 0.2
+    trace_metadata:
+      division: Assessment
+    sop: |
+      STANDARD OPERATING PROCEDURE - Assessment Objection / Relief
+      1. Objection window: 30 days from the date of the Notice of Assessment (NOA).
+      2. Requests received AFTER 30 days require special grounds - flag for senior review.
+      3. Taxpayer must state specific grounds (arithmetic error, omitted deduction, wrong income, etc.).
+      4. Required documents: copy of NOA + supporting evidence.
+      5. Processing time: up to 90 working days after all documents received.
+      6. Acknowledge receipt, confirm the objection window, list required documents.
+
+  - name: penalty_waiver
+    system_prompt: |
+      You are a tax authority officer handling penalty waiver requests.
+      Draft a professional reply email. Address the taxpayer by name.
+      Follow the SOP strictly - do not invent policies.
+      Keep the reply under 200 words.
+    model: gpt-4.1-mini
+    temperature: 0.2
+    trace_metadata:
+      division: Compliance
+    hitl_condition: "taxpayer and taxpayer.get('penalty_count', 0) >= 3"
+    sop: |
+      STANDARD OPERATING PROCEDURE - Penalty Waiver Request
+      1. Check the taxpayer's PENALTY COUNT from their record:
+         - Count 0-1: Proceed - grant waiver if underlying tax is paid in full.
+         - Count 2  : Requires compelling mitigating circumstance (illness, redundancy).
+         - Count 3+ : DO NOT make a waiver decision - escalate to supervisor (HITL required).
+      2. Waiver applies to the PENALTY AMOUNT only; underlying tax remains payable.
+      3. Do not commit to a waiver outcome without confirming full payment status.
+      4. Acknowledge the request and state next steps based on the count rule above.
+
+  - name: general_inquiry
+    system_prompt: |
+      You are a tax authority officer handling general tax inquiries.
+      Draft a professional reply email. Address the taxpayer by name.
+      Follow the SOP strictly - do not invent policies.
+      Keep the reply under 200 words.
+    model: gpt-4.1-mini
+    temperature: 0.2
+    trace_metadata:
+      division: General
+    sop: |
+      STANDARD OPERATING PROCEDURE - General Tax Inquiry
+      1. Provide accurate, factual information based on known tax regulations.
+      2. Do NOT give legal or financial advice; recommend professional consultation for complex matters.
+      3. Address the taxpayer by name if known from the taxpayer record.
+      4. Be concise, clear, and professional.
+      5. For specialist topics (objections, penalties), refer the taxpayer to the correct division.
+
+# -- Tools -------------------------------------------------------------
 tools:
-  - name: knowledge_base
-    type: search_index
-    description: Vector search over company knowledge base for reply context
-    endpoint: ${AI_SEARCH_ENDPOINT}
-    connection_secret: ai-search-api-key
-    params:
-      index_name: email-kb
-      top_k: 5
+  - name: taxpayer_db
+    type: database
+    description: PostgreSQL lookup of taxpayer records by TIN or email. Used by the lookup_taxpayer pre-step node in app.py.
+    connection_secret: database-url
 
-# Policies
+# -- Policies ----------------------------------------------------------
 policies:
   - name: pii_filter
-    stage: pre_execution
+    stage: post_execution
     action: redact
   - name: content_safety
     stage: post_execution
-    action: block
-    provider: azure_content_safety
-  - name: token_budget
-    stage: runtime
-    max_tokens_per_run: 30000
+    action: warn
+  - name: tax_accuracy
+    stage: post_execution
+    action: warn

@@ -20,5 +20,9 @@ Use **LangGraph** as the primary orchestration engine, wrapped behind an abstrac
 
 ## Consequences
 - Dependency on LangChain ecosystem (langchain-core, langgraph)
-- Abstract interface allows migration if needed
-- Team needs to learn LangGraph's state graph model
+- Abstract interface (`OrchestrationEngine`) allows migration if needed — **this is deliberate**.
+  If a critical CVE is found in LangGraph, or a clearly superior framework emerges, only
+  `ao-core/ao/engine/langgraph_engine.py` and `manifest_executor.py` need to change.
+  All app code (manifests, FastAPI routes, tools) is insulated. No changes across app repos.
+- Team needs to learn LangGraph's state graph model (isolated to ao-core contributors only;
+  app teams interact via `ao-manifest.yaml` and `ManifestExecutor`)

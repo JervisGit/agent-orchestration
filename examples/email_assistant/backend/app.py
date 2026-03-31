@@ -4,13 +4,11 @@ Classifies inbound taxpayer emails, looks up the taxpayer record from
 PostgreSQL, routes to a specialist agent with SOP-grounded prompts,
 enforces guardrail policies, and drafts a reply.
 
-Categories
-----------
-  filing_extension    — Request to extend the submission deadline
-  payment_arrangement — Instalment plan / payment difficulty
-  assessment_relief   — Objection or appeal against a tax assessment
-  penalty_waiver      — Request to waive a late-filing / late-payment penalty
-  general_inquiry     — All other tax questions
+The workflow (LangGraph graph) is built entirely from ao-manifest.yaml by
+ManifestExecutor. This file contains only app-specific code:
+  - PostgreSQL taxpayer lookup (node_lookup_taxpayer)
+  - Extended state schema (TaxEmailState)
+  - FastAPI HTTP + SSE endpoints
 
 Run (from project root):
     uvicorn backend.app:app --reload --port 8001 --app-dir examples/email_assistant
@@ -31,10 +29,11 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
-from langgraph.graph import END, StateGraph
 from psycopg.rows import dict_row
 from pydantic import BaseModel
 
+from ao.config.manifest import AppManifest
+from ao.engine.manifest_executor import ManifestExecutor
 from ao.llm.base import LLMProvider
 from ao.policy.engine import PolicyEngine
 from ao.policy.schema import PolicySet
@@ -43,6 +42,7 @@ from ao.policy.schema import PolicySet
 load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=True)
 logger = logging.getLogger("tax_email_assistant")
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+MANIFEST_PATH = Path(__file__).parent.parent / "ao-manifest.yaml"
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://ao:localdev@localhost:5432/ao")
 
 
@@ -85,8 +85,11 @@ def _create_langfuse_client() -> Any | None:
 
 langfuse_client = _create_langfuse_client()
 
-# trace_id -> active Langfuse trace object (populated during processing)
-_active_traces: dict[str, Any] = {}
+# ── ManifestExecutor ────────────────────────────────────────────────
+# Reads ao-manifest.yaml and builds the LangGraph automatically.
+# No StateGraph / add_node / add_edge code in this file.
+manifest = AppManifest.from_yaml(MANIFEST_PATH)
+executor = ManifestExecutor(manifest, llm=llm, langfuse_client=langfuse_client)
 
 # ── Step labels for SSE + Dashboard display ─────────────────────────
 STEP_LABELS: dict[str, str] = {
@@ -116,61 +119,7 @@ policies:
     action: warn
 """)
 
-# ── Standard Operating Procedures ──────────────────────────────────
-# Embedded into each specialist agent's system prompt.
-# Production: load from a knowledge base / RAG pipeline.
-
-SOPS: dict[str, str] = {
-    "filing_extension": """
-STANDARD OPERATING PROCEDURE — Filing Extension Request
-1. Extension must be requested BEFORE the original filing deadline.
-2. Maximum extension granted: 30 calendar days per tax year.
-3. Only ONE extension per tax year per taxpayer is permitted.
-4. Individuals use Form B-Ext; Corporations use Form C-Ext.
-5. Late requests (after deadline) require documented grounds (hospitalisation, natural disaster).
-6. Acknowledge the request, state the decision/next steps, and provide the form reference.
-""",
-    "payment_arrangement": """
-STANDARD OPERATING PROCEDURE — Payment Arrangement
-1. Confirm the outstanding balance from the taxpayer record before responding.
-2. Maximum instalment plan duration: 12 months.
-3. Minimum monthly instalment: SGD 100.
-4. If an ACTIVE plan already exists, offer to amend it — do not create a second plan.
-5. Interest accrues at 1.5% per month on the remaining balance during the arrangement.
-6. Include a payment reference and remind the taxpayer to retain all receipts.
-""",
-    "assessment_relief": """
-STANDARD OPERATING PROCEDURE — Assessment Objection / Relief
-1. Objection window: 30 days from the date of the Notice of Assessment (NOA).
-2. Requests received AFTER 30 days require special grounds — flag for senior review.
-3. Taxpayer must state specific grounds (arithmetic error, omitted deduction, wrong income, etc.).
-4. Required documents: copy of NOA + supporting evidence.
-5. Processing time: up to 90 working days after all documents received.
-6. Acknowledge receipt, confirm the objection window, list required documents.
-""",
-    "penalty_waiver": """
-STANDARD OPERATING PROCEDURE — Penalty Waiver Request
-1. Check the taxpayer's PENALTY COUNT from their record:
-   - Count 0-1: Proceed — grant waiver if underlying tax is paid in full.
-   - Count 2  : Requires compelling mitigating circumstance (illness, redundancy).
-   - Count 3+ : DO NOT make a waiver decision — escalate to supervisor (HITL required).
-2. Waiver applies to the PENALTY AMOUNT only; underlying tax remains payable.
-3. Do not commit to a waiver outcome without confirming full payment status.
-4. Acknowledge the request and state next steps based on the count rule above.
-""",
-    "general_inquiry": """
-STANDARD OPERATING PROCEDURE — General Tax Inquiry
-1. Provide accurate, factual information based on known tax regulations.
-2. Do NOT give legal or financial advice; recommend professional consultation for complex matters.
-3. Address the taxpayer by name if known from the taxpayer record.
-4. Be concise, clear, and professional.
-5. For specialist topics (objections, penalties), refer the taxpayer to the correct division.
-""",
-}
-
-VALID_CATEGORIES = set(SOPS.keys())
-
-# ── Graph state ─────────────────────────────────────────────────────
+# ── App-specific state schema ────────────────────────────────────────
 
 class TaxEmailState(TypedDict):
     email_id: str
@@ -181,11 +130,12 @@ class TaxEmailState(TypedDict):
     messages: list[dict]
     output: str             # draft reply
     taxpayer: dict | None   # row from taxpayers table (or None if not found)
+    _context: str           # formatted taxpayer context for specialist prompts
     trace_id: str
     policy_flags: list[str]
     hitl_required: bool
 
-# ── DB lookup ───────────────────────────────────────────────────────
+# ── DB lookup helpers ────────────────────────────────────────────────
 
 _TIN_RE = re.compile(r'\bSG-T\d{3}-\d{4}\b', re.IGNORECASE)
 
@@ -205,57 +155,11 @@ async def _db_lookup_taxpayer(sender_email: str, tin: str | None) -> dict | None
         logger.warning("Taxpayer DB lookup failed: %s", exc)
         return None
 
-# ── Graph nodes ─────────────────────────────────────────────────────
-
-async def node_lookup_taxpayer(state: TaxEmailState) -> dict:
-    """Extract TIN from email body (regex) or fall back to sender email lookup."""
-    lf_trace = _active_traces.get(state.get("trace_id", ""))
-    lf_span = lf_trace.span(name="db-lookup-taxpayer", input={"sender": state["sender"]}) if lf_trace else None
-    match = _TIN_RE.search(state["input"])
-    tin = match.group(0) if match else None
-    taxpayer = await _db_lookup_taxpayer(state["sender"], tin)
-    if lf_span:
-        lf_span.end(output={"found": taxpayer is not None, "tax_id": taxpayer.get("tax_id") if taxpayer else None})
-    return {"taxpayer": taxpayer, "messages": []}
-
-async def node_classify(state: TaxEmailState) -> dict:
-    """LLM classifies the email into a tax-authority-specific category."""
-    lf_trace = _active_traces.get(state.get("trace_id", ""))
-    classify_messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are a tax authority email triage classifier.\n"
-                "Classify the email into exactly ONE of:\n"
-                "  filing_extension    — requesting a deadline extension to file\n"
-                "  payment_arrangement — payment plan, instalments, paying difficulties\n"
-                "  assessment_relief   — objection or appeal against a tax assessment\n"
-                "  penalty_waiver      — requesting a penalty or surcharge to be waived\n"
-                "  general_inquiry     — all other tax questions\n\n"
-                "Reply with ONLY the category name. Nothing else."
-            ),
-        },
-        {"role": "user", "content": state["input"]},
-    ]
-    lf_gen = lf_trace.generation(
-        name="classify",
-        model=getattr(llm, "default_model", "unknown"),
-        input=classify_messages,
-    ) if lf_trace else None
-    resp = await llm.complete(messages=classify_messages, temperature=0.0)
-    raw = resp.content.strip().lower().replace(" ", "_")
-    route = raw if raw in VALID_CATEGORIES else "general_inquiry"
-    if lf_gen:
-        lf_gen.end(output=route, usage={"input": resp.usage.get("input_tokens", 0), "output": resp.usage.get("output_tokens", 0)})
-    return {
-        "route": route,
-        "messages": [{"role": "classifier", "content": route}],
-    }
-
 def _format_taxpayer_context(tp: dict | None) -> str:
     if not tp:
         return "── Taxpayer record NOT FOUND in database. Proceed cautiously. ──"
     return (
+        f"TAXPAYER RECORD FROM DATABASE:\n"
         f"Name          : {tp.get('full_name', '—')}\n"
         f"Tax ID        : {tp.get('tax_id', '—')}\n"
         f"Entity Type   : {tp.get('entity_type', '—')}\n"
@@ -268,91 +172,42 @@ def _format_taxpayer_context(tp: dict | None) -> str:
         f"Notes         : {tp.get('notes', '—')}"
     )
 
-async def _specialist(state: TaxEmailState, category: str) -> dict:
-    sop = SOPS[category]
-    tp_ctx = _format_taxpayer_context(state.get("taxpayer"))
-    lf_trace = _active_traces.get(state.get("trace_id", ""))
-    specialist_messages = [
-        {
-            "role": "system",
-            "content": (
-                f"You are a tax authority officer handling "
-                f"{category.replace('_', ' ')} cases.\n\n"
-                f"TAXPAYER RECORD FROM DATABASE:\n{tp_ctx}\n\n"
-                f"SOP YOU MUST FOLLOW:\n{sop}\n"
-                "Draft a professional reply email. Address the taxpayer by name. "
-                "Follow the SOP strictly — do not invent policies. "
-                "Keep the reply under 200 words."
-            ),
-        },
-        {"role": "user", "content": state["input"]},
-    ]
-    lf_gen = lf_trace.generation(
-        name=f"specialist-{category}",
-        model=getattr(llm, "default_model", "unknown"),
-        input=specialist_messages,
-        metadata={"category": category, "sop_applied": True},
+# ── Pre-step: DB lookup (app-specific, registered with ManifestExecutor) ─
+
+async def node_lookup_taxpayer(state: TaxEmailState) -> dict:
+    """Extract TIN from email body (regex) or fall back to sender email lookup.
+    Sets state['taxpayer'] and state['_context'] for the specialist agents.
+    """
+    lf_trace = executor.get_trace(state.get("trace_id", ""))
+    lf_span = lf_trace.span(
+        name="db-lookup-taxpayer", input={"sender": state["sender"]}
     ) if lf_trace else None
-    resp = await llm.complete(messages=specialist_messages, temperature=0.2)
-    if lf_gen:
-        lf_gen.end(
-            output=resp.content,
-            usage={"input": resp.usage.get("input_tokens", 0), "output": resp.usage.get("output_tokens", 0)},
-        )
+
+    match = _TIN_RE.search(state["input"])
+    tin = match.group(0) if match else None
+    taxpayer = await _db_lookup_taxpayer(state["sender"], tin)
+
+    if lf_span:
+        try:
+            lf_span.end(output={
+                "found": taxpayer is not None,
+                "tax_id": taxpayer.get("tax_id") if taxpayer else None,
+            })
+        except Exception:
+            pass
+
     return {
-        "output": resp.content,
-        "messages": [*state["messages"], {"role": "agent", "content": resp.content}],
+        "taxpayer": taxpayer,
+        "_context": _format_taxpayer_context(taxpayer),
+        "messages": [],
     }
 
-async def node_filing_extension(state: TaxEmailState) -> dict:
-    return await _specialist(state, "filing_extension")
+# ── Wire executor ────────────────────────────────────────────────────
+# node_lookup_taxpayer is registered as the only pre-step.
+# ManifestExecutor builds classifier + 5 specialist nodes from ao-manifest.yaml.
 
-async def node_payment_arrangement(state: TaxEmailState) -> dict:
-    return await _specialist(state, "payment_arrangement")
-
-async def node_assessment_relief(state: TaxEmailState) -> dict:
-    return await _specialist(state, "assessment_relief")
-
-async def node_penalty_waiver(state: TaxEmailState) -> dict:
-    result = await _specialist(state, "penalty_waiver")
-    tp = state.get("taxpayer")
-    hitl = bool(tp and (tp.get("penalty_count") or 0) >= 3)
-    flags = list(state.get("policy_flags", []))
-    if hitl:
-        flags.append(
-            f"HITL_REQUIRED: {tp.get('tax_id')} has {tp.get('penalty_count')} "
-            "penalties — waiver decision requires supervisor approval"
-        )
-    result["policy_flags"] = flags
-    result["hitl_required"] = hitl
-    return result
-
-async def node_general_inquiry(state: TaxEmailState) -> dict:
-    return await _specialist(state, "general_inquiry")
-
-# ── Build LangGraph ─────────────────────────────────────────────────
-
-def _build_graph() -> StateGraph:
-    g = StateGraph(TaxEmailState)
-    g.add_node("lookup_taxpayer",     node_lookup_taxpayer)
-    g.add_node("classify",            node_classify)
-    g.add_node("filing_extension",    node_filing_extension)
-    g.add_node("payment_arrangement", node_payment_arrangement)
-    g.add_node("assessment_relief",   node_assessment_relief)
-    g.add_node("penalty_waiver",      node_penalty_waiver)
-    g.add_node("general_inquiry",     node_general_inquiry)
-    g.set_entry_point("lookup_taxpayer")
-    g.add_edge("lookup_taxpayer", "classify")
-    g.add_conditional_edges(
-        "classify",
-        lambda s: s.get("route", "general_inquiry"),
-        {k: k for k in VALID_CATEGORIES},
-    )
-    for k in VALID_CATEGORIES:
-        g.add_edge(k, END)
-    return g
-
-compiled_graph = _build_graph().compile()
+executor.register_pre_step("lookup_taxpayer", node_lookup_taxpayer)
+compiled_graph = executor.compile(state_schema=TaxEmailState)
 
 # ── Sample taxpayer emails ──────────────────────────────────────────
 
@@ -504,7 +359,9 @@ async def list_emails() -> list[EmailOut]:
 
 @app.get("/api/emails/{email_id}/process/stream")
 async def process_email_stream(email_id: str):
-    """SSE endpoint: streams step-by-step progress as the graph runs."""
+    """SSE endpoint: streams step-by-step progress as the graph runs.
+    Trace lifecycle (Langfuse open/close) is managed by ManifestExecutor.astream().
+    """
     email = emails_db.get(email_id)
     if not email:
         raise HTTPException(status_code=404, detail="Email not found")
@@ -514,31 +371,18 @@ async def process_email_stream(email_id: str):
         logger.info("SSE stream starting for email %s (trace %s)", email_id, trace_id)
         full_text = f"From: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"
 
-        # Open Langfuse trace — wrap in try so a Langfuse error never kills the stream
-        lf_trace = None
-        if langfuse_client:
-            try:
-                lf_trace = langfuse_client.trace(
-                    name="process-email",
-                    id=trace_id,
-                    input=full_text,
-                    metadata={"email_id": email_id, "sender": email["from"], "subject": email["subject"]},
-                )
-            except Exception:
-                logger.warning("Langfuse trace() failed — continuing without tracing", exc_info=True)
-        _active_traces[trace_id] = lf_trace
-
         yield f"data: {json.dumps({'type': 'start', 'trace_id': trace_id})}\n\n"
 
         initial_state: TaxEmailState = {
             "email_id": email_id, "sender": email["from"], "subject": email["subject"],
             "input": full_text, "route": "", "messages": [], "output": "",
-            "taxpayer": None, "trace_id": trace_id, "policy_flags": [], "hitl_required": False,
+            "taxpayer": None, "_context": "", "trace_id": trace_id,
+            "policy_flags": [], "hitl_required": False,
         }
 
         try:
             final_state: dict = dict(initial_state)
-            async for step in compiled_graph.astream(initial_state, stream_mode="updates"):
+            async for step in executor.astream(initial_state, stream_mode="updates"):
                 for node_name, updates in step.items():
                     final_state.update(updates)
                     detail: dict = {}
@@ -553,7 +397,7 @@ async def process_email_stream(email_id: str):
                         detail = {"category": updates.get("route", "?")}
                     yield f"data: {json.dumps({'type': 'step', 'node': node_name, 'label': STEP_LABELS.get(node_name, node_name), 'detail': detail})}\n\n"
 
-            # Policy check
+            # Post-execution policy check
             yield f"data: {json.dumps({'type': 'step', 'node': 'policy_check', 'label': STEP_LABELS['policy_check'], 'detail': {}})}\n\n"
             flags: list[str] = list(final_state.get("policy_flags", []))
             try:
@@ -574,6 +418,10 @@ async def process_email_stream(email_id: str):
             if tp:
                 email["taxpayer_name"] = tp.get("full_name")
 
+            langfuse_url = (
+                f"{os.getenv('LANGFUSE_HOST', 'http://localhost:3000')}/traces/{trace_id}"
+                if langfuse_client else None
+            )
             entry = {
                 "trace_id": trace_id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -585,16 +433,9 @@ async def process_email_stream(email_id: str):
                 "policy_flags": flags,
                 "hitl_required": hitl,
                 "graph_nodes_visited": [m["role"] for m in final_state.get("messages", [])],
-                "langfuse_url": f"{os.getenv('LANGFUSE_HOST', 'http://localhost:3000')}/traces/{trace_id}" if langfuse_client else None,
+                "langfuse_url": langfuse_url,
             }
             processing_log.append(entry)
-
-            if lf_trace:
-                lf_trace.update(
-                    output=final_state.get("output", ""),
-                    metadata={"category": final_state["route"], "hitl": hitl, "policy_flags": flags},
-                )
-            _active_traces.pop(trace_id, None)
 
             result = {
                 "email_id": email_id, "category": final_state["route"],
@@ -602,14 +443,13 @@ async def process_email_stream(email_id: str):
                 "taxpayer_found": tp is not None,
                 "taxpayer_id": tp.get("tax_id") if tp else None,
                 "policy_flags": flags, "hitl_required": hitl, "trace_id": trace_id,
-                "langfuse_url": entry.get("langfuse_url"),
+                "langfuse_url": langfuse_url,
             }
             yield f"data: {json.dumps({'type': 'complete', 'result': result})}\n\n"
-            logger.info("SSE stream complete for email %s → %s", email_id, final_state['route'])
+            logger.info("SSE stream complete for email %s → %s", email_id, final_state["route"])
 
         except Exception as exc:
             logger.exception("SSE stream error for email %s", email_id)
-            _active_traces.pop(trace_id, None)
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
     return StreamingResponse(
@@ -627,33 +467,14 @@ async def process_email(email_id: str) -> ProcessResult:
 
     trace_id = str(uuid.uuid4())
     full_text = f"From: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"
-
-    # Open Langfuse trace
-    lf_trace = None
-    if langfuse_client:
-        lf_trace = langfuse_client.trace(
-            name="process-email",
-            id=trace_id,
-            input=full_text,
-            metadata={"email_id": email_id, "sender": email["from"]},
-        )
-    _active_traces[trace_id] = lf_trace
-
     initial_state: TaxEmailState = {
-        "email_id": email_id,
-        "sender": email["from"],
-        "subject": email["subject"],
-        "input": full_text,
-        "route": "",
-        "messages": [],
-        "output": "",
-        "taxpayer": None,
-        "trace_id": trace_id,
-        "policy_flags": [],
-        "hitl_required": False,
+        "email_id": email_id, "sender": email["from"], "subject": email["subject"],
+        "input": full_text, "route": "", "messages": [], "output": "",
+        "taxpayer": None, "_context": "", "trace_id": trace_id,
+        "policy_flags": [], "hitl_required": False,
     }
 
-    result = await compiled_graph.ainvoke(initial_state)
+    result = await executor.ainvoke(initial_state)
 
     # Guardrail policy pass
     flags: list[str] = list(result.get("policy_flags", []))
@@ -698,13 +519,6 @@ async def process_email(email_id: str) -> ProcessResult:
         tp.get("tax_id") if tp else "NOT FOUND",
         hitl, trace_id,
     )
-
-    if lf_trace:
-        lf_trace.update(
-            output=result.get("output", ""),
-            metadata={"category": result["route"], "hitl": hitl, "policy_flags": flags},
-        )
-    _active_traces.pop(trace_id, None)
 
     return ProcessResult(
         email_id=email_id,
