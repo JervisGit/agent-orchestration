@@ -181,16 +181,26 @@ def _format_taxpayer_context(tp: dict | None) -> str:
 # ── Pre-step: DB lookup (app-specific, registered with ManifestExecutor) ─
 
 async def node_lookup_taxpayer(state: TaxEmailState) -> dict:
-    """Extract TIN from email body (regex) or fall back to sender email lookup.
-    Sets state['taxpayer'] and state['_context'] for the specialist agents.
+    """Look up taxpayer record from PostgreSQL.
+
+    Only runs if a TIN (SG-TXXX-XXXX) is present in the email body.
+    If no TIN is found, returns an empty context so that agents that
+    don't need taxpayer data are not forced to wait on a DB round-trip.
+    This keeps DB access agent-driven: an agent that needs the record
+    can request the taxpayer to include their TIN.
     """
+    match = _TIN_RE.search(state["input"])
+    if not match:
+        # No TIN in email — skip DB lookup entirely
+        logger.debug("No TIN found in email %s — skipping DB lookup", state.get("email_id"))
+        return {"taxpayer": None, "_context": "", "messages": []}
+
+    tin = match.group(0)
     lf_trace = executor.get_trace(state.get("trace_id", ""))
     lf_span = lf_trace.span(
-        name="db-lookup-taxpayer", input={"sender": state["sender"]}
+        name="db-lookup-taxpayer", input={"sender": state["sender"], "tin": tin}
     ) if lf_trace else None
 
-    match = _TIN_RE.search(state["input"])
-    tin = match.group(0) if match else None
     taxpayer = await _db_lookup_taxpayer(state["sender"], tin)
 
     if lf_span:
@@ -410,6 +420,7 @@ class EmailOut(BaseModel):
     policy_flags: list[str] = []
     taxpayer_name: str | None = None
     hitl_required: bool = False
+    hitl_request_id: str | None = None
 
 class ProcessResult(BaseModel):
     email_id: str
@@ -460,6 +471,7 @@ async def list_emails() -> list[EmailOut]:
             policy_flags=e.get("policy_flags", []),
             taxpayer_name=e.get("taxpayer_name"),
             hitl_required=e.get("hitl_required", False),
+            hitl_request_id=e.get("hitl_request_id"),
         )
         for e in emails_db.values()
     ]
@@ -496,13 +508,23 @@ async def process_email_stream(email_id: str):
                     detail: dict = {}
                     if node_name == "lookup_taxpayer":
                         tp = updates.get("taxpayer")
-                        detail = {
-                            "taxpayer_found": tp is not None,
-                            "taxpayer_name": tp.get("full_name") if tp else None,
-                            "taxpayer_id": tp.get("tax_id") if tp else None,
-                        }
-                    elif node_name == "classify":
-                        detail = {"category": updates.get("route", "?")}
+                        if tp is None and not updates.get("_context"):
+                            # TIN-conditional skip — no DB hit
+                            detail = {"taxpayer_found": False, "skipped": True}
+                        else:
+                            detail = {
+                                "taxpayer_found": tp is not None,
+                                "taxpayer_name": tp.get("full_name") if tp else None,
+                                "taxpayer_id": tp.get("tax_id") if tp else None,
+                            }
+                    elif node_name in ("classify", "intent_classify"):
+                        route = updates.get("route") or ", ".join(updates.get("intents", []))
+                        detail = {"category": route or "?"}
+                    elif node_name == "dispatch":
+                        detail = {"agents": updates.get("intents", [])}
+                    elif node_name == "merge":
+                        so = updates.get("specialist_outputs") or final_state.get("specialist_outputs", {})
+                        detail = {"merged_from": list(so.keys())}
                     yield f"data: {json.dumps({'type': 'step', 'node': node_name, 'label': STEP_LABELS.get(node_name, node_name), 'detail': detail})}\n\n"
 
             # Post-execution policy check

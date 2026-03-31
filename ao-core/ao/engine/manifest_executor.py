@@ -600,9 +600,13 @@ class ManifestExecutor:
         For multiple intents, calls the LLM to synthesise a unified reply.
         """
         llm = self._llm
+        executor = self
 
         async def node_merge(state: dict) -> dict:
             specialist_outputs: dict = state.get("specialist_outputs", {})
+
+            lf_trace = executor.get_trace(state.get("trace_id", ""))
+            lf_gen = None
 
             if len(specialist_outputs) == 0:
                 output = state.get("output", "")
@@ -632,8 +636,36 @@ class ManifestExecutor:
                         ),
                     },
                 ]
+
+                if lf_trace:
+                    try:
+                        lf_gen = lf_trace.generation(
+                            name="merge",
+                            model=getattr(llm, "default_model", "unknown"),
+                            input=merge_messages,
+                            metadata={
+                                "pattern": "concurrent",
+                                "merged_specialists": list(specialist_outputs.keys()),
+                                "specialist_count": len(specialist_outputs),
+                            },
+                        )
+                    except Exception:
+                        pass
+
                 resp = await llm.complete(messages=merge_messages, temperature=0.1)
                 output = resp.content
+
+                if lf_gen:
+                    try:
+                        lf_gen.end(
+                            output=output,
+                            usage={
+                                "input": resp.usage.get("input_tokens", 0),
+                                "output": resp.usage.get("output_tokens", 0),
+                            },
+                        )
+                    except Exception:
+                        pass
 
             return {
                 "output": output,
