@@ -40,7 +40,7 @@ from ao.policy.engine import PolicyEngine
 from ao.policy.schema import PolicySet
 
 # ── Config ─────────────────────────────────────────────────────────
-load_dotenv(Path(__file__).resolve().parents[3] / ".env")
+load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=True)
 logger = logging.getLogger("tax_email_assistant")
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://ao:localdev@localhost:5432/ao")
@@ -511,6 +511,7 @@ async def process_email_stream(email_id: str):
 
     async def generate():
         trace_id = str(uuid.uuid4())
+        logger.info("SSE stream starting for email %s (trace %s)", email_id, trace_id)
         full_text = f"From: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"
 
         # Open Langfuse trace
@@ -602,8 +603,10 @@ async def process_email_stream(email_id: str):
                 "langfuse_url": entry.get("langfuse_url"),
             }
             yield f"data: {json.dumps({'type': 'complete', 'result': result})}\n\n"
+            logger.info("SSE stream complete for email %s → %s", email_id, final_state['route'])
 
         except Exception as exc:
+            logger.exception("SSE stream error for email %s", email_id)
             _active_traces.pop(trace_id, None)
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 

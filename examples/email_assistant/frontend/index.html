@@ -577,12 +577,13 @@
         }
       };
 
-      source.onerror = function() {
+      source.onerror = function(evt) {
+        console.error('[SSE] onerror fired', { completed: streamCompleted, readyState: source.readyState, evt });
         if (streamCompleted) return;  // normal close after stream finished
         source.close();
         const e = emails.find(x => x.id === id);
         if (e && e.status === 'processing') { e.status = 'new'; renderList(); showDetail(id); }
-        showToast('Stream connection lost', true);
+        showToast('Stream connection lost — check console for details', true);
       };
     }
 
