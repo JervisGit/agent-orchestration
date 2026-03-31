@@ -214,13 +214,16 @@
     .tl-icon.yellow{ background: rgba(234,179,8,0.2); color: var(--yellow); }
     .tl-label { font-weight: 500; }
     .tl-meta  { font-size: 11px; color: var(--text2); margin-top: 2px; }
+
+    /* Empty state */
+    .empty-state {
       text-align: center;
       padding: 48px;
       color: var(--text2);
       font-size: 14px;
     }
 
-    .hidden { display: none; }
+    .hidden { display: none !important; }
 
     /* DSAI App tiles */
     .app-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-bottom: 28px; }
@@ -792,9 +795,12 @@
       return div.innerHTML;
     }
 
-    // Close modals on overlay click
+    // Close modals on overlay click or Escape key
     document.querySelectorAll('.modal-overlay').forEach(el => {
       el.addEventListener('click', e => { if (e.target === el) el.classList.add('hidden'); });
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(el => el.classList.add('hidden'));
     });
 
     // Initial load

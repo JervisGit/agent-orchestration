@@ -500,6 +500,7 @@
       renderList();
       showDetail(id);  // renders empty progress-panel div
 
+      let streamCompleted = false;
       const source = new EventSource(`${API}/emails/${id}/process/stream`);
 
       source.onmessage = function(event) {
@@ -536,6 +537,7 @@
           }
 
         } else if (data.type === 'complete') {
+          streamCompleted = true;
           source.close();
           const r = data.result;
           const e = emails.find(x => x.id === id);
@@ -576,6 +578,7 @@
       };
 
       source.onerror = function() {
+        if (streamCompleted) return;  // normal close after stream finished
         source.close();
         const e = emails.find(x => x.id === id);
         if (e && e.status === 'processing') { e.status = 'new'; renderList(); showDetail(id); }
