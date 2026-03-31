@@ -63,6 +63,7 @@ module "ai" {
   environment         = var.environment
   resource_group_name = data.azurerm_resource_group.main.name
   location            = var.location
+  openai_location     = "eastus"
   tags                = var.tags
 }
 

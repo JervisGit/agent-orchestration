@@ -64,7 +64,7 @@ resource "azurerm_container_app" "ao_api" {
 
     container {
       name   = "ao-api"
-      image  = "${var.acr_login_server}/ao-api:latest"
+      image  = "mcr.microsoft.com/k8se/quickstart:latest"
       cpu    = 0.5
       memory = "1Gi"
 
@@ -113,7 +113,7 @@ resource "azurerm_container_app" "ao_worker" {
 
     container {
       name   = "ao-worker"
-      image  = "${var.acr_login_server}/ao-worker:latest"
+      image  = "mcr.microsoft.com/k8se/quickstart:latest"
       cpu    = 0.5
       memory = "1Gi"
 
