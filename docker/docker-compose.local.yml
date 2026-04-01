@@ -45,5 +45,20 @@ services:
       - postgres
       - langfuse
 
+  email-assistant:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.email-assistant
+    ports:
+      - "8001:8001"
+    environment:
+      DATABASE_URL: postgresql://ao:localdev@postgres:5432/ao
+      LANGFUSE_HOST: http://langfuse:3000
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: gemma3:1b
+    depends_on:
+      - postgres
+      - langfuse
+
 volumes:
   pgdata:
