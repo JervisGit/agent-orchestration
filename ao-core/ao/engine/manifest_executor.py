@@ -1078,16 +1078,67 @@ class ManifestExecutor:
 
             logger.info("Supervisor decided: '%s' (trace %s)", decision, state.get("trace_id", "?"))
 
+            # Push supervisor decision to token queue so it appears in real-time in the UI
+            # (rather than landing at the end via graph_steps after specialists finish)
+            token_queue = executor._token_queues.get(state.get("trace_id", ""))
+            if token_queue:
+                try:
+                    token_queue.put_nowait({
+                        "node": "supervisor",
+                        "done": True,
+                        "detail": {"next": decision if decision not in ("finish",) and decision in specialist_names else "FINISH"},
+                    })
+                except asyncio.QueueFull:
+                    pass
+
             if decision == "finish" or decision not in specialist_names:
-                # Build final output from accumulated specialist outputs
+                # Merge specialist outputs through LLM if more than one, same as merge node
                 if specialist_outputs:
                     if len(specialist_outputs) == 1:
                         final_output = next(iter(specialist_outputs.values()))
                     else:
                         sections = "\n\n".join(
-                            f"[{name}]:\n{text}" for name, text in specialist_outputs.items()
+                            f"--- {name.replace('_', ' ').title()} Specialist Response ---\n{text}"
+                            for name, text in specialist_outputs.items()
                         )
-                        final_output = sections
+                        merge_messages = [
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You are a senior tax authority officer finalising a reply email. "
+                                    "You have received specialist responses for multiple parts of one "
+                                    "taxpayer enquiry. Combine them into a single, coherent, professional "
+                                    "reply email. Do not repeat information. Address each point clearly. "
+                                    "Keep the total reply under 350 words."
+                                ),
+                            },
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"Original email:\n{state.get('input', '')}\n\n"
+                                    f"Specialist responses to combine:\n{sections}"
+                                ),
+                            },
+                        ]
+                        lf_trace = executor.get_trace(state.get("trace_id", ""))
+                        lf_merge = None
+                        if lf_trace:
+                            try:
+                                lf_merge = lf_trace.generation(
+                                    name="supervisor-merge",
+                                    model=getattr(llm, "default_model", cfg.model),
+                                    input=merge_messages,
+                                    metadata={"pattern": "supervisor", "merged_specialists": list(specialist_outputs.keys())},
+                                )
+                            except Exception:
+                                pass
+                        merge_resp = await llm.complete(messages=merge_messages, temperature=0.1)
+                        final_output = merge_resp.content
+                        if lf_merge:
+                            try:
+                                lf_merge.end(output=final_output)
+                            except Exception:
+                                pass
                 else:
                     final_output = state.get("output", "")
 
