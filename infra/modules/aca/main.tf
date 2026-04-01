@@ -119,6 +119,10 @@ resource "azurerm_container_app" "ao_api" {
     }
   }
 
+  lifecycle {
+    ignore_changes = [template[0].container[0].image]
+  }
+
   tags = var.tags
 }
 
@@ -158,6 +162,10 @@ resource "azurerm_container_app" "ao_worker" {
   }
 
   # Worker has no ingress — processes from Service Bus queues
+
+  lifecycle {
+    ignore_changes = [template[0].container[0].image]
+  }
 
   tags = var.tags
 }
@@ -247,6 +255,10 @@ resource "azurerm_container_app" "email_assistant" {
       percentage      = 100
       latest_revision = true
     }
+  }
+
+  lifecycle {
+    ignore_changes = [template[0].container[0].image]
   }
 
   tags = var.tags
