@@ -8,7 +8,6 @@ from pathlib import Path
 import psycopg
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 
 from api.routes import apps, hitl, policies, tools, workflows
 

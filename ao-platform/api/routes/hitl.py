@@ -1,6 +1,5 @@
 """HITL approval endpoints — PostgreSQL-backed with in-memory fallback."""
 
-import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException

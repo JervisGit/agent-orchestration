@@ -108,11 +108,6 @@ class AzureOpenAIProvider(LLMProvider):
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
 
-
-
-class AzureOpenAIProvider(LLMProvider):
-    """LLM provider wrapping Azure OpenAI endpoints."""
-
     def __init__(
         self,
         endpoint: str,

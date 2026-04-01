@@ -363,7 +363,7 @@ class ManifestExecutor:
             raise RuntimeError("Call compile() before astream().")
 
         trace_id: str = state.get("trace_id") or str(uuid.uuid4())
-        lf_trace = self._open_trace(trace_id, state)
+        self._open_trace(trace_id, state)
 
         try:
             async for chunk in self._compiled.astream(state, **kwargs):

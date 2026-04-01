@@ -4,4 +4,4 @@ resource_group_name = "rg-ao-dev"
 location            = "southeastasia"
 compute_platform    = "aca" # Flip to "aks" to switch compute
 # aks_cluster_name     = "aks-dsai-dev"        # Uncomment when compute_platform = "aks"
-postgres_admin_password = "" # Set via TF_VAR_postgres_admin_password
+postgres_admin_password = "Test12345678" # Set via TF_VAR_postgres_admin_password
