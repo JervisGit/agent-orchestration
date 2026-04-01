@@ -40,7 +40,10 @@ from ao.policy.engine import PolicyEngine
 from ao.policy.schema import PolicySet
 
 # ── Config ─────────────────────────────────────────────────────────
-load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=True)
+try:
+    load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=True)
+except IndexError:
+    pass  # Running inside a container — env vars injected via ACA secrets
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 MANIFEST_PATH = Path(__file__).parent.parent / "ao-manifest.yaml"
 DATABASE_URL    = os.getenv("DATABASE_URL",    "postgresql://ao:localdev@localhost:5432/ao")
