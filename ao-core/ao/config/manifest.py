@@ -55,6 +55,10 @@ class AgentConfig:
     hitl_action: str | None = None
     # Arbitrary key/value pairs attached to this agent's Langfuse generation as metadata
     trace_metadata: dict[str, Any] = field(default_factory=dict)
+    # If True, the agent is instructed to reason inside <think>...</think> tags.
+    # The thinking text is extracted and emitted as a separate SSE event so the
+    # UI can display an expandable "Agent reasoning" section before the reply.
+    show_reasoning: bool = False
 
 
 @dataclass

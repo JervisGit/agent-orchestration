@@ -117,6 +117,11 @@ langfuse_client = _create_langfuse_client()
 manifest = AppManifest.from_yaml(MANIFEST_PATH)
 executor = ManifestExecutor(manifest, llm=llm, langfuse_client=langfuse_client)
 
+# ── Supervisor-pattern executor (used for em-008) ────────────────────
+_SUPERVISOR_MANIFEST_PATH = Path(__file__).parent.parent / "ao-manifest-supervisor.yaml"
+manifest_sv = AppManifest.from_yaml(_SUPERVISOR_MANIFEST_PATH)
+executor_sv = ManifestExecutor(manifest_sv, llm=llm, langfuse_client=langfuse_client)
+
 # ── Step labels for SSE + Dashboard display ─────────────────────────
 STEP_LABELS: dict[str, str] = {
     "lookup_taxpayer":     "Looking up taxpayer record in database",
@@ -307,6 +312,10 @@ _LOOKUP_TAXPAYER_SCHEMA: dict = {
 executor.register_tool("lookup_taxpayer", _tool_lookup_taxpayer, _LOOKUP_TAXPAYER_SCHEMA)
 compiled_graph = executor.compile(state_schema=TaxEmailState)
 
+# Wire the same tool into the supervisor executor and compile it
+executor_sv.register_tool("lookup_taxpayer", _tool_lookup_taxpayer, _LOOKUP_TAXPAYER_SCHEMA)
+compiled_graph_sv = executor_sv.compile(state_schema=TaxEmailState)
+
 # ── HITL persistence helpers ──────────────────────────────────────────
 
 def _active_category(state: dict) -> str:
@@ -484,6 +493,31 @@ SAMPLE_EMAILS = [
         # is left unanswered — this demonstrates why the 'magentic' pattern exists.
         "status": "new", "category": None, "draft_reply": None, "policy_flags": [],
     },
+    {
+        "id": "em-008",
+        "from": "tbk@tbkpte.com",
+        "subject": "Assessment Dispute and Payment Query — SG-T007-8823",
+        "body": (
+            "Dear Tax Authority,\n\n"
+            "I am writing on behalf of Tan Boon Kiat Pte Ltd (TIN: SG-T007-8823) "
+            "regarding our YA 2024 Notice of Assessment.\n\n"
+            "Our assessed income includes SGD 42,000 described as 'miscellaneous income' "
+            "which we believe was incorrectly classified — it represents a capital gain "
+            "from the disposal of a subsidiary and should not be subject to income tax.\n\n"
+            "While we pursue this objection, we acknowledge the undisputed portion of "
+            "SGD 9,800 remains outstanding. We would like to arrange an instalment plan "
+            "for this amount while the assessment review is in progress, so as not to "
+            "incur further interest.\n\n"
+            "Please advise on both matters.\n\n"
+            "Regards,\nTan Boon Kiat\nDirector, Tan Boon Kiat Pte Ltd"
+        ),
+        # Uses supervisor pattern: orchestrator routes assessment_relief first,
+        # then reviews output and routes to payment_arrangement, then FINISH.
+        # Demonstrates sequential reasoning vs concurrent parallel dispatch.
+        # show_reasoning: true on specialists → CoT visible in UI.
+        "status": "new", "category": None, "draft_reply": None, "policy_flags": [],
+        "mode": "supervisor",
+    },
 ]
 
 emails_db: dict[str, dict] = {e["id"]: dict(e) for e in SAMPLE_EMAILS}
@@ -614,15 +648,17 @@ async def process_email_stream(email_id: str):
         }
 
         # ── Token streaming setup ──────────────────────────────────
+        # Route supervisor-mode emails to the supervisor executor
+        active_executor = executor_sv if email.get("mode") == "supervisor" else executor
         token_queue: asyncio.Queue = asyncio.Queue(maxsize=512)
-        executor.set_token_stream(trace_id, token_queue)
+        active_executor.set_token_stream(trace_id, token_queue)
 
         try:
             final_state: dict = dict(initial_state)
 
             # Run graph stream in a background task so we can interleave token events
             graph_task = asyncio.create_task(
-                _collect_graph_stream(executor, initial_state, final_state)
+                _collect_graph_stream(active_executor, initial_state, final_state)
             )
 
             # Drain token queue until graph finishes
@@ -636,13 +672,15 @@ async def process_email_stream(email_id: str):
 
                 if item is None:
                     break  # sentinel from executor — stream ended
-                if "token" in item:
+                if "reasoning" in item:
+                    yield f"data: {json.dumps({'type': 'reasoning', 'node': item['node'], 'text': item['reasoning']})}\n\n"
+                elif "token" in item:
                     yield f"data: {json.dumps({'type': 'token', 'node': item['node'], 'token': item['token']})}\n\n"
                 elif item.get("done"):
                     # Node finished streaming (or tool call completed) — emit step event
                     node_name = item["node"]
                     streamed_nodes.add(node_name)
-                    yield f"data: {json.dumps({'type': 'step', 'node': node_name, 'label': STEP_LABELS.get(node_name, node_name), 'detail': {}})}\n\n"
+                    yield f"data: {json.dumps({'type': 'step', 'node': node_name, 'label': STEP_LABELS.get(node_name, node_name), 'detail': item.get('detail', {})})}\n\n"
 
             # Await graph task and get node-level step events
             graph_steps = await graph_task

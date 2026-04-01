@@ -72,6 +72,7 @@ via executor.get_trace(trace_id) and attach custom spans to it.
 import asyncio
 import json as _json
 import logging
+import re as _re
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
@@ -201,10 +202,19 @@ class ManifestExecutor:
             except Exception:
                 pass
 
-        # Notify queue that tool call completed
+        # Notify queue that tool call completed — include args + result summary for UI detail
         if token_queue:
             try:
-                token_queue.put_nowait({"node": f"tool:{tool_name}", "done": True})
+                token_queue.put_nowait({
+                    "node": f"tool:{tool_name}",
+                    "done": True,
+                    "detail": {
+                        "args": args,
+                        "found": bool(state_update.get("taxpayer")),
+                        "taxpayer_name": (state_update.get("taxpayer") or {}).get("full_name"),
+                        "taxpayer_id": (state_update.get("taxpayer") or {}).get("tax_id"),
+                    },
+                })
             except asyncio.QueueFull:
                 pass
 
@@ -567,15 +577,41 @@ class ManifestExecutor:
 
             # ── Token streaming (if queue registered) ─────────────
             token_queue = executor._token_queues.get(state.get("trace_id", ""))
+
+            # Extract CoT reasoning if show_reasoning is enabled
+            raw_content = resp.content or ""
+            thinking_text = ""
+            if cfg.show_reasoning:
+                think_match = _re.search(r"<think>(.*?)</think>", raw_content, _re.DOTALL)
+                if think_match:
+                    thinking_text = think_match.group(1).strip()
+                    raw_content = _re.sub(
+                        r"<think>.*?</think>", "", raw_content, flags=_re.DOTALL
+                    ).strip()
+
             if token_queue and not resp.tool_calls:
-                # Re-stream the final response (messages already include tool results)
-                final_messages = messages if resp.tool_calls is None else messages
-                # Only stream if the last response was a real content response
-                if resp.content:
-                    # Re-run as streaming so frontend can see tokens
+                # Emit reasoning block before tokens if present
+                if thinking_text:
+                    try:
+                        token_queue.put_nowait({"node": cfg.name, "reasoning": thinking_text})
+                    except asyncio.QueueFull:
+                        pass
+
+                if cfg.show_reasoning:
+                    # Push final content word-by-word (no second LLM call needed)
+                    for word in raw_content.split(" "):
+                        if word:
+                            try:
+                                token_queue.put_nowait({"node": cfg.name, "token": word + " "})
+                            except asyncio.QueueFull:
+                                pass
+                            await asyncio.sleep(0.02)
+                    resp_content = raw_content
+                elif raw_content:
+                    # Default path: re-stream via LLM for live token-by-token display
                     tokens: list[str] = []
                     async for token in llm.complete_stream(
-                        messages=final_messages[:-0] if not resp.tool_calls else final_messages,
+                        messages=messages,
                         temperature=cfg.temperature,
                     ):
                         tokens.append(token)
@@ -583,16 +619,15 @@ class ManifestExecutor:
                             token_queue.put_nowait({"node": cfg.name, "token": token})
                         except asyncio.QueueFull:
                             pass
-                    # Use the streamed content (may differ slightly from resp.content)
-                    resp_content = "".join(tokens) if tokens else resp.content
-                    try:
-                        token_queue.put_nowait({"node": cfg.name, "done": True})
-                    except asyncio.QueueFull:
-                        pass
+                    resp_content = "".join(tokens) if tokens else raw_content
                 else:
-                    resp_content = resp.content
+                    resp_content = raw_content
+                try:
+                    token_queue.put_nowait({"node": cfg.name, "done": True})
+                except asyncio.QueueFull:
+                    pass
             else:
-                resp_content = resp.content
+                resp_content = raw_content
 
             if lf_gen:
                 try:

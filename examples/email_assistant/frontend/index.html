@@ -363,6 +363,33 @@
     }
     .step-tool-icon { font-size: 10px; }
 
+    .reasoning-box {
+      margin: 6px 0 6px 4px;
+      border: 1px solid #444;
+      border-radius: 6px;
+      font-size: 12px;
+      background: rgba(255,255,255,0.03);
+    }
+    .reasoning-box summary {
+      cursor: pointer;
+      padding: 5px 10px;
+      color: var(--text2);
+      user-select: none;
+      list-style: none;
+    }
+    .reasoning-box summary::before { content: "▶ "; font-size: 10px; }
+    .reasoning-box[open] summary::before { content: "▼ "; font-size: 10px; }
+    .reasoning-text {
+      padding: 6px 12px 8px;
+      margin: 0;
+      white-space: pre-wrap;
+      color: var(--text2);
+      font-family: monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      border-top: 1px solid #333;
+    }
+
     .warnings {
       margin-top: 12px;
     }
@@ -576,6 +603,17 @@
           const stepRows = wfSteps.map(s => {
             let det = '';
             const d = s.detail || {};
+            if (s.node === '__reasoning__') {
+              return `<details class="reasoning-box"><summary>Agent reasoning</summary><pre class="reasoning-text">${esc(d.text || '')}</pre></details>`;
+            }
+            if (s.node && s.node.startsWith('tool:')) {
+              let toolDetail = '';
+              if (d.found && d.taxpayer_name)
+                toolDetail = ` → ${esc(d.taxpayer_id)} · ${esc(d.taxpayer_name)}`;
+              else if (d.args && (d.args.tin || d.args.email))
+                toolDetail = ` → ${esc(d.args.tin || d.args.email)} · No record found`;
+              return `<div class="step-tool"><span>&#x1F527;</span> ${esc(s.label)}<span class="step-detail" style="display:inline">${toolDetail}</span></div>`;
+            }
             if (d.taxpayer_found === true && d.taxpayer_name)
               det = `<div class="step-detail">→ ${esc(d.taxpayer_name)} · ${esc(d.taxpayer_id || '')}</div>`;
             else if (d.taxpayer_skipped)
@@ -640,7 +678,18 @@
         let data; try { data = JSON.parse(event.data); } catch { return; }
         const panel = document.getElementById(`progress-${id}`);
 
-        if (data.type === 'token') {
+        if (data.type === 'reasoning') {
+          // Render an expandable "Agent reasoning" box in the progress panel
+          emailWorkflowSteps[id] = emailWorkflowSteps[id] || [];
+          emailWorkflowSteps[id].push({ label: 'Agent reasoning', node: '__reasoning__', detail: { text: data.text } });
+          if (panel) {
+            const box = document.createElement('details');
+            box.className = 'reasoning-box';
+            box.innerHTML = `<summary>Agent reasoning</summary><pre class="reasoning-text">${esc(data.text)}</pre>`;
+            panel.appendChild(box);
+          }
+
+        } else if (data.type === 'token') {
           // Find or create the live streaming reply box
           const detail = document.getElementById('email-detail');
           let streamBox = document.getElementById(`stream-reply-${id}`);
@@ -694,7 +743,13 @@
             if (data.node && data.node.startsWith('tool:')) {
               const el = document.createElement('div');
               el.className = 'step-tool';
-              el.innerHTML = `<span>&#x1F527;</span> ${esc(data.label)}`;
+              const d = data.detail || {};
+              let toolDetail = '';
+              if (d.found && d.taxpayer_name)
+                toolDetail = ` <span class="step-detail" style="display:inline">→ ${esc(d.taxpayer_id)} · ${esc(d.taxpayer_name)}</span>`;
+              else if (d.args && (d.args.tin || d.args.email))
+                toolDetail = ` <span class="step-detail" style="display:inline;color:var(--yellow)">→ ${esc(d.args.tin || d.args.email)} · No record found</span>`;
+              el.innerHTML = `<span>&#x1F527;</span> ${esc(data.label)}${toolDetail}`;
               panel.lastElementChild?.before?.(el) || panel.appendChild(el);
             } else {
               const el = document.createElement('div');
