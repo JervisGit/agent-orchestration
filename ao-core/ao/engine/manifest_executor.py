@@ -11,15 +11,46 @@ Usage
 
     manifest = AppManifest.from_yaml("ao-manifest.yaml")
     executor = ManifestExecutor(manifest, llm=llm, langfuse_client=lf)
+
+    # Register a callable tool the LLM can invoke (optional)
+    executor.register_tool("lookup_taxpayer", fn, schema={...})
+
+    # OR register a fixed pre-step (runs unconditionally before classification)
     executor.register_pre_step("lookup_taxpayer", node_lookup_taxpayer)
+
     compiled_graph = executor.compile(state_schema=MyAppState)
 
-    # SSE streaming (same API as compiled_graph.astream):
+    # SSE streaming with token-level events:
+    queue = asyncio.Queue()
+    executor.set_token_stream(trace_id, queue)
     async for chunk in executor.astream(state, stream_mode="updates"):
         ...
 
     # Batch:
     result = await executor.ainvoke(state)
+
+Tool calling
+------------
+When tools are registered, specialist agents receive the tool definitions via
+the OpenAI `tools` parameter.  If the LLM calls a tool, ManifestExecutor
+executes it, appends the result to the message history, and re-queries the LLM
+for the final reply.  Each tool call is traced as a Langfuse span.
+
+Token streaming
+---------------
+Call executor.set_token_stream(trace_id, queue) before astream().  The
+executor will push {"node": name, "token": str} dicts to the queue as tokens
+arrive from the LLM.  A sentinel {"node": name, "done": True} is pushed when a
+node completes.  The SSE generator reads from both astream() (for node
+boundaries) and the queue (for individual tokens).
+
+Supervisor pattern
+------------------
+When pattern="supervisor" is set in the manifest, a supervisor agent
+(the first agent with role="supervisor", or the first agent overall) reads the
+request, decides which specialist to invoke next, and loops until it outputs
+"FINISH".  Each specialist's output is accumulated in specialist_outputs and
+surfaced to the supervisor on the next iteration.
 
 Convention: _context state key
 -------------------------------
@@ -39,6 +70,7 @@ via executor.get_trace(trace_id) and attach custom spans to it.
 """
 
 import asyncio
+import json as _json
 import logging
 import uuid
 from collections.abc import AsyncGenerator, Callable
@@ -72,6 +104,10 @@ class ManifestExecutor:
         self._pre_steps: list[tuple[str, Callable]] = []
         self._compiled: Any = None
         self._active_traces: dict[str, Any] = {}
+        # name -> (callable, openai_function_schema)
+        self._tools: dict[str, tuple[Callable, dict]] = {}
+        # trace_id -> asyncio.Queue for token streaming
+        self._token_queues: dict[str, asyncio.Queue] = {}
 
     # ── Registration ────────────────────────────────────────────────
 
@@ -83,6 +119,87 @@ class ManifestExecutor:
         """
         self._pre_steps.append((name, fn))
         return self
+
+    def register_tool(self, name: str, fn: Callable, schema: dict) -> "ManifestExecutor":
+        """Register a callable tool that specialist agents can invoke via function calling.
+
+        fn     — async or sync callable; called with the keyword args the LLM provides.
+                 May return a str, or a dict {"content": str, "state": dict} to also
+                 merge keys back into the graph state.
+        schema — OpenAI function schema dict (keys: name, description, parameters).
+        Returns self for fluent chaining.
+        """
+        self._tools[name] = (fn, schema)
+        return self
+
+    def set_token_stream(self, trace_id: str, queue: asyncio.Queue) -> None:
+        """Register a queue to receive token events for a specific trace.
+
+        The executor pushes {"node": name, "token": str} for each token and
+        {"node": name, "done": True} when a node finishes streaming.
+        Call before astream() / ainvoke() for that trace.
+        """
+        self._token_queues[trace_id] = queue
+
+    def clear_token_stream(self, trace_id: str) -> None:
+        self._token_queues.pop(trace_id, None)
+
+    # ── Tool helpers ─────────────────────────────────────────────────
+
+    def _tools_list(self) -> list[dict] | None:
+        """Return the OpenAI tools array, or None if no tools registered."""
+        if not self._tools:
+            return None
+        return [{"type": "function", "function": schema} for _, schema in self._tools.values()]
+
+    async def _execute_tool_call(
+        self,
+        call_id: str,
+        tool_name: str,
+        arguments_json: str,
+        state: dict,
+        lf_trace: Any | None,
+    ) -> tuple[dict, dict]:
+        """Execute a registered tool; return (tool_message, state_update)."""
+        if tool_name not in self._tools:
+            msg = {"role": "tool", "tool_call_id": call_id, "content": f"Unknown tool: {tool_name}"}
+            return msg, {}
+
+        fn, _ = self._tools[tool_name]
+        try:
+            args = _json.loads(arguments_json) if arguments_json else {}
+        except Exception:
+            args = {}
+
+        lf_span = None
+        if lf_trace:
+            try:
+                lf_span = lf_trace.span(name=f"tool-{tool_name}", input=args)
+            except Exception:
+                pass
+
+        try:
+            raw = await fn(**args) if asyncio.iscoroutinefunction(fn) else fn(**args)
+        except Exception as exc:
+            logger.warning("Tool %s raised: %s", tool_name, exc, exc_info=True)
+            raw = f"Error executing {tool_name}: {exc}"
+
+        # Tools may return plain str or {"content": str, "state": dict}
+        if isinstance(raw, dict) and "content" in raw:
+            content_str = str(raw["content"])
+            state_update = raw.get("state", {})
+        else:
+            content_str = str(raw)
+            state_update = {}
+
+        if lf_span:
+            try:
+                lf_span.end(output=content_str)
+            except Exception:
+                pass
+
+        msg = {"role": "tool", "tool_call_id": call_id, "content": content_str}
+        return msg, state_update
 
     # ── Compile ─────────────────────────────────────────────────────
 
@@ -96,10 +213,12 @@ class ManifestExecutor:
             return self._compile_router(state_schema)
         if self._manifest.pattern in ("concurrent", "magentic"):
             return self._compile_concurrent(state_schema)
+        if self._manifest.pattern == "supervisor":
+            return self._compile_supervisor(state_schema)
         raise NotImplementedError(
             f"Pattern '{self._manifest.pattern}' not yet supported by ManifestExecutor. "
-            "Supported: 'router', 'concurrent'. 'magentic' is an alias for 'concurrent'. "
-            "For 'linear', 'supervisor', 'planner', register your graph via LangGraphEngine."
+            "Supported: 'router', 'concurrent', 'supervisor'. 'magentic' is an alias for 'concurrent'. "
+            "For 'linear', 'planner', register your graph via LangGraphEngine."
         )
 
     def _compile_router(self, state_schema: type) -> Any:
@@ -231,6 +350,14 @@ class ManifestExecutor:
                 yield chunk
         finally:
             self._close_trace(trace_id, state)
+            self.clear_token_stream(trace_id)
+            # Signal end of stream to any token queue consumer
+            q = self._token_queues.get(trace_id)
+            if q:
+                try:
+                    q.put_nowait(None)  # sentinel: stream ended
+                except asyncio.QueueFull:
+                    pass
 
     async def ainvoke(self, state: dict, **kwargs) -> dict:
         """Invoke workflow and return final state. Manages Langfuse trace lifecycle."""
@@ -341,7 +468,16 @@ class ManifestExecutor:
         return node_classify
 
     def _make_specialist_node(self, cfg: AgentConfig, categories: list[str]) -> Callable:
-        """Return an async node function for a specialist agent."""
+        """Return an async node function for a specialist agent.
+
+        Supports:
+        - Tool calling: if tools are registered, passes them to the LLM and executes
+          any tool_calls in a loop before producing the final reply.
+        - Token streaming: if a queue is registered for the trace_id, streams tokens
+          and pushes them to the queue.
+        - State merging: tool results that return {"state": {...}} are merged into the
+          graph state (e.g. taxpayer record for HITL condition evaluation).
+        """
         llm = self._llm
         executor = self
 
@@ -349,14 +485,15 @@ class ManifestExecutor:
             # Build system prompt: optional context prefix + base prompt + SOP
             parts: list[str] = []
             ctx = state.get("_context", "")
-            if ctx:
+            # Only prepend _context if no tools registered (tools fetch context on demand)
+            if ctx and not executor._tools:
                 parts.append(ctx)
             parts.append(cfg.system_prompt)
             if cfg.sop:
                 parts.append(f"SOP YOU MUST FOLLOW:\n{cfg.sop}")
             system_prompt = "\n\n".join(parts)
 
-            messages = [
+            messages: list[dict] = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": state["input"]},
             ]
@@ -374,33 +511,95 @@ class ManifestExecutor:
                 except Exception:
                     pass
 
-            resp = await llm.complete(messages=messages, temperature=cfg.temperature)
+            tool_kwargs = {}
+            tools_list = executor._tools_list()
+            if tools_list:
+                tool_kwargs["tools"] = tools_list
+
+            # ── Tool-calling loop ──────────────────────────────────
+            extra_state: dict = {}
+            max_tool_rounds = 5
+            for _round in range(max_tool_rounds):
+                resp = await llm.complete(messages=messages, temperature=cfg.temperature, **tool_kwargs)
+
+                if resp.tool_calls:
+                    # Append assistant message with tool_call requests
+                    messages.append({
+                        "role": "assistant",
+                        "tool_calls": [
+                            {"id": tc["id"], "type": "function",
+                             "function": {"name": tc["name"], "arguments": tc["arguments"]}}
+                            for tc in resp.tool_calls
+                        ],
+                    })
+                    # Execute each tool and append results
+                    for tc in resp.tool_calls:
+                        tool_msg, state_update = await executor._execute_tool_call(
+                            tc["id"], tc["name"], tc["arguments"], state, lf_trace
+                        )
+                        messages.append(tool_msg)
+                        extra_state.update(state_update)
+                    # Loop: ask LLM to continue with tool results
+                    continue
+
+                # No tool calls — we have the final text response
+                break
+
+            # ── Token streaming (if queue registered) ─────────────
+            token_queue = executor._token_queues.get(state.get("trace_id", ""))
+            if token_queue and not resp.tool_calls:
+                # Re-stream the final response (messages already include tool results)
+                final_messages = messages if resp.tool_calls is None else messages
+                # Only stream if the last response was a real content response
+                if resp.content:
+                    # Re-run as streaming so frontend can see tokens
+                    tokens: list[str] = []
+                    async for token in llm.complete_stream(
+                        messages=final_messages[:-0] if not resp.tool_calls else final_messages,
+                        temperature=cfg.temperature,
+                    ):
+                        tokens.append(token)
+                        try:
+                            token_queue.put_nowait({"node": cfg.name, "token": token})
+                        except asyncio.QueueFull:
+                            pass
+                    # Use the streamed content (may differ slightly from resp.content)
+                    resp_content = "".join(tokens) if tokens else resp.content
+                    try:
+                        token_queue.put_nowait({"node": cfg.name, "done": True})
+                    except asyncio.QueueFull:
+                        pass
+                else:
+                    resp_content = resp.content
+            else:
+                resp_content = resp.content
 
             if lf_gen:
                 try:
                     lf_gen.end(
-                        output=resp.content,
+                        output=resp_content,
                         usage={
-                            "input": resp.usage.get("input_tokens", 0),
-                            "output": resp.usage.get("output_tokens", 0),
+                            "input": resp.usage.get("prompt_tokens", resp.usage.get("input_tokens", 0)),
+                            "output": resp.usage.get("completion_tokens", resp.usage.get("output_tokens", 0)),
                         },
                     )
                 except Exception:
                     pass
 
             result: dict = {
-                "output": resp.content,
-                "messages": state.get("messages", []) + [{"role": "agent", "content": resp.content}],
+                "output": resp_content,
+                "messages": state.get("messages", []) + [{"role": "agent", "content": resp_content}],
+                **extra_state,
             }
 
             # Evaluate HITL condition from manifest
             if cfg.hitl_condition:
                 try:
-                    tp = state.get("taxpayer")
+                    tp = extra_state.get("taxpayer") or state.get("taxpayer")
                     hitl = bool(eval(  # noqa: S307 — developer-authored manifest config only
                         cfg.hitl_condition,
                         {"__builtins__": _EVAL_BUILTINS},
-                        {"state": state, "taxpayer": tp, "output": resp.content},
+                        {"state": state, "taxpayer": tp, "output": resp_content},
                     ))
                     if hitl:
                         flags = list(state.get("policy_flags", []))
@@ -493,14 +692,14 @@ class ManifestExecutor:
             """Run a single specialist and return its result dict."""
             parts: list[str] = []
             ctx = state.get("_context", "")
-            if ctx:
+            if ctx and not executor._tools:
                 parts.append(ctx)
             parts.append(cfg.system_prompt)
             if cfg.sop:
                 parts.append(f"SOP YOU MUST FOLLOW:\n{cfg.sop}")
             system_prompt = "\n\n".join(parts)
 
-            messages = [
+            messages: list[dict] = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": state["input"]},
             ]
@@ -523,25 +722,55 @@ class ManifestExecutor:
                 except Exception:
                     pass
 
-            resp = await executor._llm.complete(messages=messages, temperature=cfg.temperature)
+            tool_kwargs = {}
+            tools_list = executor._tools_list()
+            if tools_list:
+                tool_kwargs["tools"] = tools_list
+
+            extra_state: dict = {}
+            for _round in range(5):
+                resp = await executor._llm.complete(messages=messages, temperature=cfg.temperature, **tool_kwargs)
+                if resp.tool_calls:
+                    messages.append({
+                        "role": "assistant",
+                        "tool_calls": [
+                            {"id": tc["id"], "type": "function",
+                             "function": {"name": tc["name"], "arguments": tc["arguments"]}}
+                            for tc in resp.tool_calls
+                        ],
+                    })
+                    for tc in resp.tool_calls:
+                        tool_msg, state_update = await executor._execute_tool_call(
+                            tc["id"], tc["name"], tc["arguments"], state, lf_trace
+                        )
+                        messages.append(tool_msg)
+                        extra_state.update(state_update)
+                    continue
+                break
 
             if lf_gen:
                 try:
                     lf_gen.end(
                         output=resp.content,
                         usage={
-                            "input": resp.usage.get("input_tokens", 0),
-                            "output": resp.usage.get("output_tokens", 0),
+                            "input": resp.usage.get("prompt_tokens", resp.usage.get("input_tokens", 0)),
+                            "output": resp.usage.get("completion_tokens", resp.usage.get("output_tokens", 0)),
                         },
                     )
                 except Exception:
                     pass
 
-            result: dict = {"output": resp.content, "hitl_required": False, "policy_flags": [], "hitl_action": ""}
+            result: dict = {
+                "output": resp.content,
+                "hitl_required": False,
+                "policy_flags": [],
+                "hitl_action": "",
+                **extra_state,
+            }
 
             if cfg.hitl_condition:
                 try:
-                    tp = state.get("taxpayer")
+                    tp = extra_state.get("taxpayer") or state.get("taxpayer")
                     hitl = bool(eval(  # noqa: S307 — developer-authored manifest config only
                         cfg.hitl_condition,
                         {"__builtins__": _EVAL_BUILTINS},
@@ -673,6 +902,158 @@ class ManifestExecutor:
             }
 
         return node_merge
+
+    def _compile_supervisor(self, state_schema: type) -> Any:
+        """Build the supervisor pattern: [pre-steps] → supervisor → specialist (loop) → END.
+
+        The supervisor agent reads the request, decides which specialist to invoke
+        (by name), receives its output, then decides the next specialist or "FINISH".
+        Corresponds to Microsoft's 'Orchestrator' / 'Magentic-One orchestrator' pattern.
+
+        Manifest convention: the agent whose name is 'supervisor', or the first agent
+        if none has that name, is used as the orchestrator.  All other agents are
+        specialist candidates.
+        """
+        agents = {a.name: a for a in self._manifest.agents}
+
+        # Identify supervisor vs specialists
+        supervisor_cfg = agents.get("supervisor") or self._manifest.agents[0]
+        specialists_cfg = {k: v for k, v in agents.items() if k != supervisor_cfg.name}
+        specialist_names = list(specialists_cfg.keys())
+
+        graph = StateGraph(state_schema)
+
+        # ── Pre-steps ──────────────────────────────────────────────
+        prev: str | None = None
+        for step_name, step_fn in self._pre_steps:
+            graph.add_node(step_name, step_fn)
+            if prev is None:
+                graph.set_entry_point(step_name)
+            else:
+                graph.add_edge(prev, step_name)
+            prev = step_name
+
+        # ── Supervisor node ────────────────────────────────────────
+        graph.add_node("supervisor", self._make_supervisor_node(supervisor_cfg, specialist_names))
+        if prev:
+            graph.add_edge(prev, "supervisor")
+        else:
+            graph.set_entry_point("supervisor")
+
+        # ── Specialist nodes (each loops back to supervisor) ───────
+        for name, cfg in specialists_cfg.items():
+            graph.add_node(name, self._make_supervisor_specialist_node(cfg))
+            graph.add_edge(name, "supervisor")
+
+        # ── Conditional routing from supervisor ────────────────────
+        def _route_supervisor(state: dict) -> str:
+            nxt = state.get("next_agent", "")
+            return nxt if nxt in specialists_cfg else END
+
+        graph.add_conditional_edges(
+            "supervisor",
+            _route_supervisor,
+            {name: name for name in specialists_cfg} | {END: END},
+        )
+
+        self._compiled = graph.compile()
+        logger.info(
+            "ManifestExecutor compiled '%s' (supervisor pattern, %d specialists, %d pre-steps)",
+            self._manifest.app_id, len(specialists_cfg), len(self._pre_steps),
+        )
+        return self._compiled
+
+    def _make_supervisor_node(self, cfg: AgentConfig, specialist_names: list[str]) -> Callable:
+        """Return an async node that decides which specialist to invoke next (or FINISH)."""
+        llm = self._llm
+        executor = self
+        specialists_text = "\n".join(f"  - {name}" for name in specialist_names)
+
+        async def node_supervisor(state: dict) -> dict:
+            specialist_outputs: dict = state.get("specialist_outputs", {})
+
+            system_prompt = cfg.system_prompt.replace("{specialists}", specialists_text)
+            messages: list[dict] = [{"role": "system", "content": system_prompt}]
+            messages.append({"role": "user", "content": state["input"]})
+
+            # Give the supervisor visibility into what specialists have already said
+            for sp_name, sp_output in specialist_outputs.items():
+                messages.append({
+                    "role": "assistant",
+                    "content": f"[{sp_name} specialist response]:\n{sp_output}",
+                })
+
+            lf_trace = executor.get_trace(state.get("trace_id", ""))
+            if lf_trace:
+                try:
+                    lf_gen = lf_trace.generation(
+                        name=f"supervisor-step-{len(specialist_outputs)}",
+                        model=getattr(llm, "default_model", cfg.model),
+                        input=messages,
+                        metadata={"pattern": "supervisor", "step": len(specialist_outputs)},
+                    )
+                except Exception:
+                    lf_gen = None
+            else:
+                lf_gen = None
+
+            resp = await llm.complete(messages=messages, temperature=cfg.temperature)
+            decision = resp.content.strip().lower().replace(" ", "_").strip(".")
+
+            if lf_gen:
+                try:
+                    lf_gen.end(output=decision)
+                except Exception:
+                    pass
+
+            logger.info("Supervisor decided: '%s' (trace %s)", decision, state.get("trace_id", "?"))
+
+            if decision == "finish" or decision not in specialist_names:
+                # Build final output from accumulated specialist outputs
+                if specialist_outputs:
+                    if len(specialist_outputs) == 1:
+                        final_output = next(iter(specialist_outputs.values()))
+                    else:
+                        sections = "\n\n".join(
+                            f"[{name}]:\n{text}" for name, text in specialist_outputs.items()
+                        )
+                        final_output = sections
+                else:
+                    final_output = state.get("output", "")
+
+                return {
+                    "next_agent": "FINISH",
+                    "output": final_output,
+                    "messages": state.get("messages", []) + [
+                        {"role": "supervisor", "content": "FINISH"}
+                    ],
+                }
+
+            return {
+                "next_agent": decision,
+                "messages": state.get("messages", []) + [
+                    {"role": "supervisor", "content": decision}
+                ],
+            }
+
+        return node_supervisor
+
+    def _make_supervisor_specialist_node(self, cfg: AgentConfig) -> Callable:
+        """Specialist node for the supervisor pattern.
+
+        Same as the standard specialist node but accumulates output in
+        specialist_outputs[name] rather than overwriting the top-level output.
+        """
+        base_node = self._make_specialist_node(cfg, [])
+
+        async def node_supervisor_specialist(state: dict) -> dict:
+            result = await base_node(state)
+            specialist_outputs = dict(state.get("specialist_outputs") or {})
+            specialist_outputs[cfg.name] = result.get("output", "")
+            result["specialist_outputs"] = specialist_outputs
+            return result
+
+        return node_supervisor_specialist
 
     # ── Convenience constructor ─────────────────────────────────────
 

@@ -63,7 +63,35 @@
 - [ ] **Tool access control** — `AgentConfig.tools` declared in manifest but `ManifestExecutor`
       does not enforce per-agent tool binding at runtime
 
-## Phase 5 — RAG Search Example
+## Phase 5 — Email Assistant Deepening
+*Goal: demonstrate true agent-driven tool use, supervisor orchestration, and visible reasoning.*
+
+- [ ] **LLM-driven DB lookup** — convert `node_lookup_taxpayer` fixed pre-step into a
+      LangGraph tool (`lookup_taxpayer(tin)`) that the LLM calls when it decides it needs
+      the taxpayer record; tool call + result traced as a Langfuse span
+- [ ] **Supervisor/orchestrator pattern** — implement `supervisor` in `ManifestExecutor`:
+      orchestrator LLM reads request, decides which specialist to invoke, can loop;
+      contrasted with `concurrent` fan-out in the manifest comments
+- [ ] **Token streaming + reasoning visibility** — stream individual LLM tokens to the
+      frontend via SSE; surface `<thinking>` blocks from reasoning models (o1, deepseek-r1)
+      as a separate `reasoning` SSE event type, similar to GitHub Copilot thought process UI
+- [ ] **App-level policies** — formalise that app-specific policies live in the app repo
+      manifest (not the platform); platform serves only cross-cutting governance policies;
+      document as ADR-008 amendment
+
+## Phase 6 — Self-Hosted Langfuse on Azure
+*Goal: data sovereignty — traces must not leave the Azure tenant.*
+
+- [ ] Add `ca-langfuse-dev` Container App to `infra/modules/aca/main.tf`
+      (`langfuse/langfuse:latest` image, internal ingress only)
+- [ ] Wire to existing `psql-ao-dev` (separate `langfuse` database) and `redis-ao-dev`
+      (Redis is already provisioned but unused — this is its intended purpose)
+- [ ] Change `LANGFUSE_HOST` env var on email-assistant + ao-api from
+      `https://cloud.langfuse.com` to the internal ACA FQDN
+- [ ] Add Langfuse admin credentials to `secrets.auto.tfvars` + Key Vault
+- [ ] Verify traces appear in self-hosted instance after `terraform apply`
+
+## Phase 8 — RAG Search Example
 *Goal: validate manifest + linear pattern; second reference app.*
 
 - [ ] `examples/rag_search` using the **linear** pattern
@@ -71,14 +99,14 @@
 - [ ] `ao-manifest.yaml` declares linear agents + search tool
 - [ ] Validates `ManifestExecutor` works across patterns (not just router + concurrent)
 
-## Phase 6 — Graph Compliance Example
+## Phase 9 — Graph Compliance Example
 *Goal: validate supervisor pattern; test user-delegated identity.*
 
 - [ ] `examples/graph_compliance` using the **supervisor** pattern
 - [ ] Microsoft Graph API tool with user-delegated Entra identity
 - [ ] Tests the `identity_mode: user_delegated` flow end-to-end
 
-## Phase 7 — Azure Deployment (dev environment)
+## Phase 10 — Azure Deployment (dev environment)
 *Goal: full stack running on Azure Container Apps (ACA) in a single dev environment.*
 
 - [ ] Provision `rg-ao-dev` and run `terraform apply -var-file=environments/dev.tfvars`

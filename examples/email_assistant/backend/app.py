@@ -15,6 +15,7 @@ Run (from project root):
 """
 
 import json
+import asyncio
 import logging
 import os
 import re
@@ -121,6 +122,7 @@ STEP_LABELS: dict[str, str] = {
     "lookup_taxpayer":     "Looking up taxpayer record in database",
     "classify":            "Classifying email category",
     "intent_classify":     "Detecting all intents in this email",
+    "supervisor":          "Supervisor deciding next specialist to invoke",
     "filing_extension":    "Filing Extension agent drafting reply",
     "payment_arrangement": "Payment Arrangement agent reviewing case",
     "assessment_relief":   "Assessment Relief agent reviewing objection",
@@ -129,6 +131,7 @@ STEP_LABELS: dict[str, str] = {
     "dispatch":            "Running specialist agents in parallel",
     "merge":               "Synthesising specialist responses into one reply",
     "policy_check":        "Applying guardrail policies",
+    "tool:lookup_taxpayer": "Agent looking up taxpayer record from database",
 }
 
 # ── Policy engine ───────────────────────────────────────────────────
@@ -233,15 +236,13 @@ def _format_taxpayer_context(tp: dict | None) -> str:
 async def node_lookup_taxpayer(state: TaxEmailState) -> dict:
     """Look up taxpayer record from PostgreSQL.
 
-    Only runs if a TIN (SG-TXXX-XXXX) is present in the email body.
-    If no TIN is found, returns an empty context so that agents that
-    don't need taxpayer data are not forced to wait on a DB round-trip.
-    This keeps DB access agent-driven: an agent that needs the record
-    can request the taxpayer to include their TIN.
+    Kept as a pre-step fallback for the router/concurrent patterns so that
+    the taxpayer record is in state for HITL condition evaluation even when
+    the LLM uses the tool-calling path.  In the tool-calling path this node
+    is skipped (no pre_steps registered) and the tool does the lookup.
     """
     match = _TIN_RE.search(state["input"])
     if not match:
-        # No TIN in email — skip DB lookup entirely
         logger.debug("No TIN found in email %s — skipping DB lookup", state.get("email_id"))
         return {"taxpayer": None, "_context": "", "messages": []}
 
@@ -268,11 +269,42 @@ async def node_lookup_taxpayer(state: TaxEmailState) -> dict:
         "messages": [],
     }
 
-# ── Wire executor ────────────────────────────────────────────────────
-# node_lookup_taxpayer is registered as the only pre-step.
-# ManifestExecutor builds classifier + 5 specialist nodes from ao-manifest.yaml.
 
-executor.register_pre_step("lookup_taxpayer", node_lookup_taxpayer)
+async def _tool_lookup_taxpayer(tin: str) -> dict:
+    """Tool callable: look up a taxpayer by TIN, return both LLM-facing text and state update."""
+    taxpayer = await _db_lookup_taxpayer("", tin)
+    return {
+        "content": _format_taxpayer_context(taxpayer),
+        "state": {
+            "taxpayer": taxpayer,
+            "_context": _format_taxpayer_context(taxpayer),
+        },
+    }
+
+_LOOKUP_TAXPAYER_SCHEMA: dict = {
+    "name": "lookup_taxpayer",
+    "description": (
+        "Look up a taxpayer's record from the database using their Tax Identification "
+        "Number (TIN). Call this when the email contains a TIN (format: SG-TXXX-XXXX) "
+        "and you need taxpayer details such as outstanding balance, penalty count, or "
+        "filing status to respond accurately."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "tin": {
+                "type": "string",
+                "description": "The taxpayer's TIN, e.g. SG-T001-2890",
+            }
+        },
+        "required": ["tin"],
+    },
+}
+
+# ── Wire executor ────────────────────────────────────────────────────
+# Register lookup_taxpayer as an LLM-callable tool so specialists decide
+# when to fetch taxpayer data rather than forcing a DB hit on every email.
+executor.register_tool("lookup_taxpayer", _tool_lookup_taxpayer, _LOOKUP_TAXPAYER_SCHEMA)
 compiled_graph = executor.compile(state_schema=TaxEmailState)
 
 # ── HITL persistence helpers ──────────────────────────────────────────
@@ -457,6 +489,27 @@ SAMPLE_EMAILS = [
 emails_db: dict[str, dict] = {e["id"]: dict(e) for e in SAMPLE_EMAILS}
 processing_log: list[dict] = []
 
+# ── Graph stream collector (used by SSE token-streaming endpoint) ───
+
+async def _collect_graph_stream(
+    exec_: ManifestExecutor,
+    initial_state: dict,
+    final_state: dict,
+) -> list[tuple[str, dict]]:
+    """Run executor.astream and collect (node_name, updates) pairs.
+
+    Also merges updates into final_state in-place so the SSE generator
+    can build the completion payload after the task finishes.
+    Returns the ordered list of (node_name, updates) for step-event emission.
+    """
+    steps: list[tuple[str, dict]] = []
+    async for chunk in exec_.astream(initial_state, stream_mode="updates"):
+        for node_name, updates in chunk.items():
+            final_state.update(updates)
+            steps.append((node_name, updates))
+    return steps
+
+
 # ── Pydantic models ─────────────────────────────────────────────────
 
 class EmailOut(BaseModel):
@@ -560,26 +613,51 @@ async def process_email_stream(email_id: str):
             "policy_flags": [], "hitl_required": False, "hitl_action": "",
         }
 
+        # ── Token streaming setup ──────────────────────────────────
+        token_queue: asyncio.Queue = asyncio.Queue(maxsize=512)
+        executor.set_token_stream(trace_id, token_queue)
+
         try:
             final_state: dict = dict(initial_state)
-            async for step in executor.astream(initial_state, stream_mode="updates"):
-                for node_name, updates in step.items():
-                    final_state.update(updates)
+
+            # Run graph stream in a background task so we can interleave token events
+            graph_task = asyncio.create_task(
+                _collect_graph_stream(executor, initial_state, final_state)
+            )
+
+            # Drain token queue until graph finishes
+            while not graph_task.done() or not token_queue.empty():
+                try:
+                    item = token_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    await asyncio.sleep(0.01)
+                    continue
+
+                if item is None:
+                    break  # sentinel from executor — stream ended
+                if "token" in item:
+                    yield f"data: {json.dumps({'type': 'token', 'node': item['node'], 'token': item['token']})}\n\n"
+                elif item.get("done"):
+                    # Node finished streaming — emit step event
+                    node_name = item["node"]
+                    yield f"data: {json.dumps({'type': 'step', 'node': node_name, 'label': STEP_LABELS.get(node_name, node_name), 'detail': {}})}\n\n"
+
+            # Await graph task and get node-level step events
+            graph_steps = await graph_task
+            for node_name, updates in graph_steps:
+                final_state.update(updates)
+                # Only emit step events for nodes that didn't stream tokens
+                if not any(u.get("node") == node_name for u in []):
                     detail: dict = {}
                     if node_name == "lookup_taxpayer":
                         tp = updates.get("taxpayer")
-                        if tp is None and not updates.get("_context"):
-                            # TIN-conditional skip — no DB hit
-                            detail = {"taxpayer_found": False, "skipped": True}
-                        else:
-                            detail = {
-                                "taxpayer_found": tp is not None,
-                                "taxpayer_name": tp.get("full_name") if tp else None,
-                                "taxpayer_id": tp.get("tax_id") if tp else None,
-                            }
+                        detail = {"taxpayer_found": tp is not None, "skipped": tp is None and not updates.get("_context")}
+                        if tp:
+                            detail.update({"taxpayer_name": tp.get("full_name"), "taxpayer_id": tp.get("tax_id")})
                     elif node_name in ("classify", "intent_classify"):
-                        route = updates.get("route") or ", ".join(updates.get("intents", []))
-                        detail = {"category": route or "?"}
+                        detail = {"category": updates.get("route") or ", ".join(updates.get("intents", []))}
+                    elif node_name == "supervisor":
+                        detail = {"next": updates.get("next_agent", "?")}
                     elif node_name == "dispatch":
                         detail = {"agents": updates.get("intents", [])}
                     elif node_name == "merge":
