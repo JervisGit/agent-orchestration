@@ -1165,7 +1165,10 @@ async def get_taxpayer(tax_id: str):
 
 @app.get("/")
 async def frontend():
-    return FileResponse(FRONTEND_DIR / "index.html")
+    return FileResponse(
+        FRONTEND_DIR / "index.html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 @app.get("/{path:path}")
 async def static_fallback(path: str):
