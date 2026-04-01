@@ -10,6 +10,7 @@ COPY ao-core/ ./ao-core/
 COPY examples/email_assistant/backend/ ./backend/
 COPY examples/email_assistant/frontend/ ./frontend/
 COPY examples/email_assistant/ao-manifest.yaml ./ao-manifest.yaml
+COPY examples/email_assistant/ao-manifest-supervisor.yaml ./ao-manifest-supervisor.yaml
 
 RUN pip install --no-cache-dir \
     ./ao-core \
