@@ -83,6 +83,7 @@ from langgraph.graph import END, StateGraph
 from ao.config.manifest import AgentConfig, AppManifest
 from ao.engine.patterns.router import RouterState
 from ao.llm.base import LLMProvider
+from ao.tools.schema import AgentMessage, ToolResult, ToolSchema
 
 logger = logging.getLogger(__name__)
 
@@ -128,9 +129,15 @@ class ManifestExecutor:
                  May return a str, or a dict {"content": str, "state": dict} to also
                  merge keys back into the graph state.
         schema — OpenAI function schema dict (keys: name, description, parameters).
+                 Validated against ToolSchema; raises ValueError if malformed.
         Returns self for fluent chaining.
         """
-        self._tools[name] = (fn, schema)
+        from pydantic import ValidationError
+        try:
+            validated = ToolSchema.model_validate(schema)
+        except ValidationError as exc:
+            raise ValueError(f"Invalid tool schema for '{name}': {exc}") from exc
+        self._tools[name] = (fn, validated)
         return self
 
     def set_token_stream(self, trace_id: str, queue: asyncio.Queue) -> None:
@@ -148,10 +155,28 @@ class ManifestExecutor:
     # ── Tool helpers ─────────────────────────────────────────────────
 
     def _tools_list(self) -> list[dict] | None:
-        """Return the OpenAI tools array, or None if no tools registered."""
+        """Return the OpenAI tools array for all registered tools, or None if empty."""
         if not self._tools:
             return None
-        return [{"type": "function", "function": schema} for _, schema in self._tools.values()]
+        return [{"type": "function", "function": ts.to_openai_function()} for _, ts in self._tools.values()]
+
+    def _tools_list_for_agent(self, cfg: AgentConfig) -> list[dict] | None:
+        """Return the OpenAI tools array filtered to only tools the agent may use.
+
+        If ``cfg.tools`` is non-empty, only those named tools are exposed to the
+        agent (enforcing per-agent tool access control declared in the manifest).
+        If ``cfg.tools`` is empty, all registered tools are available (default).
+        Returns None if no tools are available for this agent.
+        """
+        if not self._tools:
+            return None
+        allowed = set(cfg.tools) if cfg.tools else set(self._tools.keys())
+        tools = [
+            {"type": "function", "function": ts.to_openai_function()}
+            for name, (_, ts) in self._tools.items()
+            if name in allowed
+        ]
+        return tools or None
 
     async def _execute_tool_call(
         self,
@@ -166,7 +191,7 @@ class ManifestExecutor:
             msg = {"role": "tool", "tool_call_id": call_id, "content": f"Unknown tool: {tool_name}"}
             return msg, {}
 
-        fn, _ = self._tools[tool_name]
+        fn, _schema = self._tools[tool_name]
         try:
             args = _json.loads(arguments_json) if arguments_json else {}
         except Exception:
@@ -195,6 +220,9 @@ class ManifestExecutor:
         else:
             content_str = str(raw)
             state_update = {}
+
+        # Validate tool result shape before merging into state
+        ToolResult(tool_name=tool_name, call_id=call_id, content=content_str, state_update=state_update)
 
         if lf_span:
             try:
@@ -482,7 +510,9 @@ class ManifestExecutor:
 
             return {
                 "route": route,
-                "messages": state.get("messages", []) + [{"role": "classifier", "content": route}],
+                "messages": state.get("messages", []) + [
+                    AgentMessage(role="classifier", content=route, agent_name=cfg.name).to_dict()
+                ],
             }
 
         return node_classify
@@ -505,13 +535,13 @@ class ManifestExecutor:
             # Build system prompt: optional context prefix + base prompt + SOP
             parts: list[str] = []
             ctx = state.get("_context", "")
-            # Only prepend _context if no tools registered (tools fetch context on demand)
-            if ctx and not executor._tools:
+            allowed_tools = executor._tools_list_for_agent(cfg)
+            # Only prepend _context if no tools available for this agent
+            if ctx and not allowed_tools:
                 parts.append(ctx)
-            # When tools are registered, prepend an explicit instruction so the LLM
-            # reliably calls the tool rather than inventing taxpayer data.
-            if executor._tools:
-                tool_names = list(executor._tools.keys())
+            # Instruct the LLM about the tools it is allowed to use
+            if allowed_tools:
+                tool_names = [t["function"]["name"] for t in allowed_tools]
                 parts.append(
                     f"You have access to the following tools: {', '.join(tool_names)}.\n"
                     "When the email contains a Tax Identification Number (TIN, format SG-T###-####), "
@@ -542,9 +572,8 @@ class ManifestExecutor:
                     pass
 
             tool_kwargs = {}
-            tools_list = executor._tools_list()
-            if tools_list:
-                tool_kwargs["tools"] = tools_list
+            if allowed_tools:
+                tool_kwargs["tools"] = allowed_tools
 
             # ── Tool-calling loop ──────────────────────────────────
             extra_state: dict = {}
@@ -643,7 +672,9 @@ class ManifestExecutor:
 
             result: dict = {
                 "output": resp_content,
-                "messages": state.get("messages", []) + [{"role": "agent", "content": resp_content}],
+                "messages": state.get("messages", []) + [
+                    AgentMessage(role="agent", content=resp_content, agent_name=cfg.name).to_dict()
+                ],
                 **extra_state,
             }
 
@@ -729,7 +760,7 @@ class ManifestExecutor:
             return {
                 "intents": intents,
                 "messages": state.get("messages", []) + [
-                    {"role": "intent_classifier", "content": ", ".join(intents)}
+                    AgentMessage(role="intent_classifier", content=", ".join(intents), agent_name=cfg.name).to_dict()
                 ],
             }
 
@@ -747,10 +778,11 @@ class ManifestExecutor:
             """Run a single specialist and return its result dict."""
             parts: list[str] = []
             ctx = state.get("_context", "")
-            if ctx and not executor._tools:
+            allowed_tools = executor._tools_list_for_agent(cfg)
+            if ctx and not allowed_tools:
                 parts.append(ctx)
-            if executor._tools:
-                tool_names = list(executor._tools.keys())
+            if allowed_tools:
+                tool_names = [t["function"]["name"] for t in allowed_tools]
                 parts.append(
                     f"You have access to the following tools: {', '.join(tool_names)}.\n"
                     "When the email contains a Tax Identification Number (TIN, format SG-T###-####), "
@@ -786,9 +818,8 @@ class ManifestExecutor:
                     pass
 
             tool_kwargs = {}
-            tools_list = executor._tools_list()
-            if tools_list:
-                tool_kwargs["tools"] = tools_list
+            if allowed_tools:
+                tool_kwargs["tools"] = allowed_tools
 
             extra_state: dict = {}
             for _round in range(5):
@@ -968,7 +999,9 @@ class ManifestExecutor:
 
             return {
                 "output": output,
-                "messages": state.get("messages", []) + [{"role": "merge", "content": output}],
+                "messages": state.get("messages", []) + [
+                    AgentMessage(role="merge", content=output).to_dict()
+                ],
             }
 
         return node_merge
@@ -1146,14 +1179,14 @@ class ManifestExecutor:
                     "next_agent": "FINISH",
                     "output": final_output,
                     "messages": state.get("messages", []) + [
-                        {"role": "supervisor", "content": "FINISH"}
+                        AgentMessage(role="supervisor", content="FINISH", agent_name=cfg.name).to_dict()
                     ],
                 }
 
             return {
                 "next_agent": decision,
                 "messages": state.get("messages", []) + [
-                    {"role": "supervisor", "content": decision}
+                    AgentMessage(role="supervisor", content=decision, agent_name=cfg.name).to_dict()
                 ],
             }
 

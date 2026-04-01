@@ -96,6 +96,8 @@ module "aca" {
   langfuse_public_key             = var.langfuse_public_key
   langfuse_secret_key             = var.langfuse_secret_key
   langfuse_host                   = var.langfuse_host
+  servicebus_connection_string    = module.messaging.servicebus_connection_string
+  redis_url                       = module.database.redis_connection_string
   tags                            = var.tags
 }
 

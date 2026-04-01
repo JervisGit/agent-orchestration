@@ -37,6 +37,16 @@ variable "langfuse_host" {
   type    = string
   default = "https://cloud.langfuse.com"
 }
+variable "servicebus_connection_string" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+variable "redis_url" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
 variable "tags" { type = map(string) }
 
 # ── Container Apps Environment ─────────────────────────────────────
@@ -204,6 +214,14 @@ resource "azurerm_container_app" "email_assistant" {
     name  = "langfuse-secret-key"
     value = var.langfuse_secret_key
   }
+  secret {
+    name  = "servicebus-connection-string"
+    value = var.servicebus_connection_string
+  }
+  secret {
+    name  = "redis-url"
+    value = var.redis_url
+  }
 
   template {
     min_replicas = 0
@@ -238,6 +256,14 @@ resource "azurerm_container_app" "email_assistant" {
       env {
         name  = "LANGFUSE_HOST"
         value = var.langfuse_host
+      }
+      env {
+        name        = "SERVICEBUS_CONNECTION_STRING"
+        secret_name = "servicebus-connection-string"
+      }
+      env {
+        name        = "REDIS_URL"
+        secret_name = "redis-url"
       }
       env {
         name  = "AO_PLATFORM_URL"

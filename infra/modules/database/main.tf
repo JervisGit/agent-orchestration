@@ -89,3 +89,8 @@ output "postgresql_connection_string" {
 output "redis_hostname" {
   value = azurerm_redis_cache.ao.hostname
 }
+
+output "redis_connection_string" {
+  value     = azurerm_redis_cache.ao.primary_connection_string
+  sensitive = true
+}

@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from ao.config.manifest import AppManifest
 from ao.engine.manifest_executor import ManifestExecutor
 from ao.llm.base import LLMProvider
+from ao.memory.short_term import ShortTermMemory
 from ao.policy.engine import PolicyEngine
 from ao.policy.schema import PolicySet
 
@@ -50,6 +51,14 @@ MANIFEST_PATH = Path(__file__).parent.parent / "ao-manifest.yaml"
 DATABASE_URL    = os.getenv("DATABASE_URL",    "postgresql://ao:localdev@localhost:5432/ao")
 PLATFORM_URL    = os.getenv("AO_PLATFORM_URL", "http://localhost:8000")
 APP_ID          = "tax_email_assistant"
+
+# Service Bus — dead-letter failed stream runs (no-op locally when not set)
+_SERVICEBUS_CONN_STR  = os.getenv("SERVICEBUS_CONNECTION_STRING")
+_SERVICEBUS_TOPIC     = os.getenv("SERVICEBUS_DEAD_LETTER_TOPIC", "ao-dead-letter")
+
+# Redis — email state persistence across restarts (no-op locally when not set)
+_REDIS_URL = os.getenv("REDIS_URL")
+_redis_memory: ShortTermMemory | None = None
 
 # ── Structured JSON logging ─────────────────────────────────────────
 def _configure_logging() -> None:
@@ -156,6 +165,55 @@ policies:
     action: warn
 """
 policies: PolicySet = PolicySet.from_yaml(_POLICY_YAML_FALLBACK)
+
+
+async def _send_dead_letter(email_id: str, error: str, trace_id: str) -> None:
+    """Send a failed stream run to the Service Bus dead-letter topic.
+
+    No-op when SERVICEBUS_CONNECTION_STRING is not set (local dev).
+    Called via asyncio.create_task so it never blocks the SSE response.
+    """
+    if not _SERVICEBUS_CONN_STR:
+        return
+    import json as _json_dl
+
+    from azure.servicebus import ServiceBusMessage
+    from azure.servicebus.aio import ServiceBusClient
+
+    body = _json_dl.dumps({
+        "workflow_id": trace_id,
+        "step_name": "process_email_stream",
+        "email_id": email_id,
+        "error": error,
+        "retry_count": 0,
+    })
+    try:
+        async with ServiceBusClient.from_connection_string(_SERVICEBUS_CONN_STR) as client:
+            async with client.get_topic_sender(topic_name=_SERVICEBUS_TOPIC) as sender:
+                await sender.send_messages(ServiceBusMessage(body))
+        logger.warning(
+            "Dead-lettered failed email stream email_id=%s trace_id=%s", email_id, trace_id
+        )
+    except Exception:
+        logger.exception("Failed to enqueue dead-letter for email %s", email_id)
+
+
+async def _persist_email_state(email_id: str, email: dict) -> None:
+    """Persist processed email state to Redis so it survives an ACA restart."""
+    if not _redis_memory:
+        return
+    try:
+        await _redis_memory.set_data(email_id, "state", {
+            "status": email.get("status"),
+            "category": email.get("category"),
+            "draft_reply": email.get("draft_reply"),
+            "policy_flags": email.get("policy_flags", []),
+            "hitl_required": email.get("hitl_required", False),
+            "taxpayer_name": email.get("taxpayer_name"),
+            "hitl_request_id": email.get("hitl_request_id"),
+        })
+    except Exception as exc:
+        logger.warning("Could not persist email %s to Redis: %s", email_id, exc)
 
 
 async def _load_policies_from_platform(app_id: str) -> PolicySet | None:
@@ -573,7 +631,7 @@ class ProcessResult(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global policies
+    global policies, _redis_memory
     db_ok = False
     try:
         async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
@@ -581,6 +639,22 @@ async def lifespan(app: FastAPI):
         db_ok = True
     except Exception as exc:
         logger.warning("PostgreSQL unavailable: %s", exc)
+
+    # ── Redis: init + hydrate in-memory email state from previous run ──
+    if _REDIS_URL:
+        try:
+            _redis_memory = ShortTermMemory(redis_url=_REDIS_URL, ttl=86400)
+            restored = 0
+            for email_id in list(emails_db.keys()):
+                stored = await _redis_memory.get_data(email_id, "state")
+                if stored:
+                    emails_db[email_id].update(stored)
+                    restored += 1
+            if restored:
+                logger.info("Restored %d email states from Redis", restored)
+        except Exception as exc:
+            logger.warning("Redis unavailable — email state will not persist across restarts: %s", exc)
+            _redis_memory = None
 
     # Try to load policies from the AO Platform API; fall back to hardcoded defaults
     platform_policies = await _load_policies_from_platform(APP_ID)
@@ -593,9 +667,13 @@ async def lifespan(app: FastAPI):
     print(
         f"Tax Email Assistant ready — LLM: {type(llm).__name__}, "
         f"DB: {'connected' if db_ok else 'OFFLINE — taxpayer lookup disabled'}, "
+        f"Redis: {'connected' if _redis_memory else 'disabled'}, "
         f"Langfuse: {'connected' if langfuse_client else 'disabled (no keys)'}"
     )
     yield
+
+    if _redis_memory:
+        await _redis_memory.close()
 
 app = FastAPI(title="Tax Email Assistant", version="2.0.0", lifespan=lifespan)
 app.add_middleware(
@@ -761,6 +839,9 @@ async def process_email_stream(email_id: str):
             }
             processing_log.append(entry)
 
+            # Persist to Redis so processed state survives a container restart
+            await _persist_email_state(email_id, email)
+
             result = {
                 "email_id": email_id, "category": category,
                 "draft_reply": final_state["output"],
@@ -776,6 +857,7 @@ async def process_email_stream(email_id: str):
 
         except Exception as exc:
             logger.exception("SSE stream error for email %s", email_id)
+            asyncio.create_task(_send_dead_letter(email_id, str(exc), trace_id))
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
     return StreamingResponse(
@@ -848,6 +930,7 @@ async def process_email(email_id: str) -> ProcessResult:
         "langfuse_url": f"{os.getenv('LANGFUSE_HOST', 'http://localhost:3000')}/traces/{trace_id}" if langfuse_client else None,
     }
     processing_log.append(entry)
+    await _persist_email_state(email_id, email)
     logger.info(
         "Processed %s → %s | taxpayer=%s | hitl=%s | trace=%s",
         email_id, category,
