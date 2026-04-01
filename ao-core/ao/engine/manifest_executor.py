@@ -113,9 +113,24 @@ class ManifestExecutor:
         self._token_queues: dict[str, asyncio.Queue] = {}
         # trace_id -> asyncio.Event; set to request cancellation mid-stream
         self._cancel_events: dict[str, asyncio.Event] = {}
-        # Shared MemorySaver checkpointer — persists node-level state per thread_id
-        # so an interrupted run can resume from the last completed node.
-        self._checkpointer = MemorySaver()
+        # Checkpointer — saves node-level state after every node so a cancelled run
+        # can resume from the last completed node.
+        # Uses Redis (AsyncRedisSaver) when REDIS_URL is set so checkpoints survive
+        # container restarts.  Falls back to in-process MemorySaver for local dev.
+        import os as _os
+        _redis_url = _os.environ.get("REDIS_URL")
+        if _redis_url:
+            try:
+                from langgraph.checkpoint.redis.aio import AsyncRedisSaver
+                self._checkpointer = AsyncRedisSaver.from_conn_string(_redis_url)
+                logger.info("ManifestExecutor using Redis checkpointer (%s)", _redis_url.split("@")[-1])
+            except Exception as _exc:
+                logger.warning(
+                    "Redis checkpointer unavailable (%s) — falling back to MemorySaver", _exc
+                )
+                self._checkpointer = MemorySaver()
+        else:
+            self._checkpointer = MemorySaver()
 
     # ── Registration ────────────────────────────────────────────────
 
@@ -277,8 +292,8 @@ class ManifestExecutor:
     def compile(self, state_schema: type = RouterState) -> Any:
         """Build and compile the LangGraph from the manifest.
 
-        The graph is compiled with the shared MemorySaver checkpointer so that
-        state is saved after every node.  Pass thread_id in the LangGraph config
+        The graph is compiled with the shared checkpointer (Redis or MemorySaver) so
+        that state is saved after every node.  Pass thread_id in the LangGraph config
         (via astream / ainvoke) to enable resume after interruption.
 
         Returns the compiled graph (same object returned by StateGraph.compile()).
@@ -432,7 +447,8 @@ class ManifestExecutor:
 
         self._open_trace(trace_id, state)
 
-        # thread_id enables MemorySaver to checkpoint per email and resume
+        # thread_id enables the checkpointer to save state per email and resume
+        # after interruption (Redis) or within the same process (MemorySaver).
         lg_config = {"configurable": {"thread_id": thread_id}}
 
         try:

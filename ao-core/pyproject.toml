@@ -9,6 +9,7 @@ description = "Agent Orchestration SDK for DSAI applications"
 requires-python = ">=3.11"
 dependencies = [
     "langgraph>=0.2",
+    "langgraph-checkpoint-redis>=0.1",
     "langchain-core>=0.3",
     "langchain-openai>=0.2",
     "openai>=1.0",

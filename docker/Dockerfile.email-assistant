@@ -19,7 +19,8 @@ RUN pip install --no-cache-dir \
     python-multipart \
     python-dotenv \
     python-json-logger \
-    httpx
+    httpx \
+    langgraph-checkpoint-redis
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
