@@ -33,49 +33,72 @@
   conditional DB lookup (skips if no TIN in email body), formal MS-style styling ✅
 - Sample emails: em-006 (HITL demo), em-007 (multi-intent concurrent pattern demo)
 
-## Phase 3 — Production Readiness
+## Phase 3 — Production Readiness ✅ (infrastructure)
 *Goal: safe to deploy, observable in Azure.*
 
-- [x] HITL escalation events traced (resolution event on originating Langfuse trace) ✅
-- [x] Container images updated to Python 3.13, correct runtime deps ✅
-- [x] `Dockerfile.email-assistant` added ✅
-- [x] `/healthz` endpoints: DB ping + LLM ping — used by ACA health probes ✅
-- [x] Structured JSON logging (`python-json-logger`) with `trace_id` per line ✅
-- [x] Email assistant Container App added to ACA Terraform module ✅
-- [x] CI/CD pipeline (`ci.yml`) builds + deploys email_assistant image ✅
-- [x] `staging.tfvars` environment added ✅
-- [ ] Config-driven tracing: switch `ManifestExecutor` to `LangfuseCallbackHandler`
-      for auto-tracing; remove manual span/generation calls from executor nodes
-- [ ] Policy evaluation Langfuse span (currently silent in post-execution check)
+- [x] HITL escalation events traced (resolution event on originating Langfuse trace)
+- [x] Container images updated to Python 3.13, correct runtime deps
+- [x] `Dockerfile.email-assistant` added
+- [x] `/healthz` endpoints: DB ping + LLM ping — used by ACA health probes
+- [x] Structured JSON logging (`python-json-logger`) with `trace_id` per line
+- [x] Email assistant Container App added to ACA Terraform module
+- [x] CI/CD pipeline (`ci.yml`) builds + deploys email_assistant image
+- [x] `staging.tfvars` environment added
+- [ ] **App policies loaded from Platform API** — `app.py` still hardcodes `PolicySet.from_yaml(...)`;
+      `ao-platform/api/routes/policies.py` has full CRUD but email assistant doesn't read from it
+- [ ] **Config-driven tracing** — switch `ManifestExecutor` to `LangfuseCallbackHandler`
+      to auto-trace; remove manual span/generation calls from executor nodes
+- [ ] **Policy evaluation Langfuse span** — policy check node runs silently post-execution
 
-## Phase 4 — RAG Search Example
+## Phase 4 — Platform Management
+*Goal: operators manage agents, tools, and policies from the AO Platform, not by editing files.*
+
+The SDK already has the right structures; this phase wires them end-to-end:
+
+- [ ] **Tool registry API** — `POST /api/tools/`, `GET /api/tools/` backed by `ao_tools` DB table;
+      `ToolRegistry` in `ao-core` already handles registration but has no HTTP surface
+- [ ] **Tool access control** — `AgentConfig.tools: [tool_names]` is declared in manifest
+      but `ManifestExecutor` does not enforce it; add per-agent tool binding in executor
+- [ ] **Manifest API** — `POST /api/apps/{app_id}/manifest` to register/update an app's
+      `ao-manifest.yaml` via HTTP (store + validate in DB); currently only file-based
+- [ ] **Dashboard: Apps tab** — show registered apps, agents per app, tools per agent;
+      currently the "DSAI Apps" nav item exists but has no content
+- [ ] **App policies from API** — email assistant (and all future apps) reads active policies
+      from `GET /api/policies?app_id=` at startup instead of hardcoding them
+
+## Phase 5 — RAG Search Example
 *Goal: validate manifest + linear pattern; second reference app.*
 
 - [ ] `examples/rag_search` using the **linear** pattern
 - [ ] pgvector embeddings or Azure AI Search
 - [ ] `ao-manifest.yaml` declares linear agents + search tool
-- [ ] Validates `ManifestExecutor` works across patterns (not just router)
+- [ ] Validates `ManifestExecutor` works across patterns (not just router + concurrent)
 
-## Phase 5 — Graph Compliance Example
+## Phase 6 — Graph Compliance Example
 *Goal: validate supervisor pattern; test user-delegated identity.*
 
 - [ ] `examples/graph_compliance` using the **supervisor** pattern
 - [ ] Microsoft Graph API tool with user-delegated Entra identity
 - [ ] Tests the `identity_mode: user_delegated` flow end-to-end
 
-## Phase 6 — Azure Deployment
-*Goal: full end-to-end on Azure Container Apps.*
+## Phase 7 — Azure Deployment (dev environment)
+*Goal: full stack running on Azure Container Apps (ACA) in a single dev environment.*
 
-- [ ] Real container images replacing placeholder images in ACR
-- [ ] CI/CD pipeline triggers on main branch (`infra/` + `ao-core/` + `ao-platform/`)
-- [ ] End-to-end smoke test against ACA after deploy
-- [ ] Production environment (`prod.tfvars`) — gated by manual approval
+- [ ] Provision `rg-ao-dev` and run `terraform apply -var-file=environments/dev.tfvars`
+- [ ] Store secrets in `kv-ao-dev` (OpenAI key, Langfuse keys, postgres password)
+- [ ] Build and push all three images to ACR; CI/CD auto-deploys on push to `main`
+- [ ] Smoke test: process em-006 end-to-end against Azure-hosted stack
+- [ ] Verify Langfuse Cloud traces are visible for the deployed run
 
 ---
 
-## Open Items (pre-production)
-See `docs/decisions/006-observability-runtime-decisions.md` for full detail.
+## Honest Gap Summary
 
-- Policies + SOPs loaded from DB / manifest (not hardcoded Python)
-- Config-driven Langfuse tracing via `LangfuseCallbackHandler`
-- Policy evaluation Langfuse span
+| Capability | Declared | SDK | API | Dashboard | Enforced at runtime |
+|---|---|---|---|---|---|
+| Agent declaration (YAML) | ✅ | ✅ | — | — | ✅ |
+| Tool declaration (YAML) | ✅ | ✅ | ❌ | ❌ | ❌ *not wired* |
+| Tool access per agent | ✅ | ✅ | ❌ | ❌ | ❌ *not enforced* |
+| Policy CRUD | ✅ | ✅ | ✅ | ✅ | ❌ *apps hardcode* |
+| HITL approval flow | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Langfuse tracing | ✅ | ✅ | — | link | ✅ *manual spans* |
