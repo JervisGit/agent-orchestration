@@ -63,21 +63,25 @@
 - [ ] **Tool access control** — `AgentConfig.tools` declared in manifest but `ManifestExecutor`
       does not enforce per-agent tool binding at runtime
 
-## Phase 5 — Email Assistant Deepening
+## Phase 5 — Email Assistant Deepening ✅
 *Goal: demonstrate true agent-driven tool use, supervisor orchestration, and visible reasoning.*
 
-- [ ] **LLM-driven DB lookup** — convert `node_lookup_taxpayer` fixed pre-step into a
-      LangGraph tool (`lookup_taxpayer(tin)`) that the LLM calls when it decides it needs
-      the taxpayer record; tool call + result traced as a Langfuse span
-- [ ] **Supervisor/orchestrator pattern** — implement `supervisor` in `ManifestExecutor`:
-      orchestrator LLM reads request, decides which specialist to invoke, can loop;
-      contrasted with `concurrent` fan-out in the manifest comments
-- [ ] **Token streaming + reasoning visibility** — stream individual LLM tokens to the
-      frontend via SSE; surface `<thinking>` blocks from reasoning models (o1, deepseek-r1)
-      as a separate `reasoning` SSE event type, similar to GitHub Copilot thought process UI
-- [ ] **App-level policies** — formalise that app-specific policies live in the app repo
-      manifest (not the platform); platform serves only cross-cutting governance policies;
-      document as ADR-008 amendment
+- [x] **LLM-driven DB lookup** — `lookup_taxpayer(tin)` registered as an LLM-callable tool
+      via `executor.register_tool()`; LLM decides when to invoke it; Langfuse span
+      `tool-lookup_taxpayer` nested inside each specialist generation; tool result detail
+      (TIN + name) rendered as a purple sub-row in the UI workflow panel
+- [x] **Supervisor/orchestrator pattern** — `_compile_supervisor()` + `_make_supervisor_node()`
+      in `ManifestExecutor`; em-008 (Tan Boon Kiat Pte Ltd) uses `ao-manifest-supervisor.yaml`;
+      supervisor routes `assessment_relief → payment_arrangement → FINISH`; outputs merged
+      via LLM synthesis node; supervisor decisions pushed to SSE queue in real-time
+- [x] **Token streaming** — specialists stream tokens to frontend via `asyncio.Queue`; live
+      blue reply box with blinking cursor during generation; `type=token` SSE events
+- [x] **Scratchpad reasoning visibility** — `show_reasoning: true` in manifest injects
+      `<think>…</think>` instruction; extracted text emitted as `type=reasoning` SSE event;
+      collapsible "Agent reasoning" accordion rendered in UI; ADR-009 documents scratchpad
+      vs. native o1/o3/o4 reasoning tradeoffs
+- [x] **ADR-009**: reasoning model strategy (scratchpad vs. native CoT)
+- [x] **ADR-010**: orchestration pattern selection framework (router/concurrent/supervisor/linear)
 
 ## Phase 6 — Self-Hosted Langfuse on Azure
 *Goal: data sovereignty — traces must not leave the Azure tenant.*
@@ -85,11 +89,42 @@
 - [ ] Add `ca-langfuse-dev` Container App to `infra/modules/aca/main.tf`
       (`langfuse/langfuse:latest` image, internal ingress only)
 - [ ] Wire to existing `psql-ao-dev` (separate `langfuse` database) and `redis-ao-dev`
-      (Redis is already provisioned but unused — this is its intended purpose)
+      (Redis is already provisioned but unused — this is its first active use)
 - [ ] Change `LANGFUSE_HOST` env var on email-assistant + ao-api from
       `https://cloud.langfuse.com` to the internal ACA FQDN
 - [ ] Add Langfuse admin credentials to `secrets.auto.tfvars` + Key Vault
 - [ ] Verify traces appear in self-hosted instance after `terraform apply`
+
+## Phase 7 — Platform Hardening (open backlog)
+*Goal: close real gaps between what is declared and what is enforced at runtime.*
+
+### Messaging infrastructure
+- [ ] **Service Bus wiring** — dead-letter handler (`workers/dead_letter.py`) exists but
+      Service Bus queues are not connected to the live email processing path; wire
+      `process_email_stream` failures to a dead-letter queue for retry + alerting
+- [ ] **Redis usage** — Redis is provisioned (`redis-ao-dev`) but never read or written;
+      intended use: SSE token queue persistence across ACA restarts, Langfuse worker queue
+
+### Input/output validation
+- [ ] **Pydantic tool schemas** — `register_tool()` accepts raw `dict` OpenAI function schema;
+      replace with a `ToolSchema` Pydantic model that validates `name`, `description`,
+      `parameters` at registration time; emit a typed error if schema is malformed
+- [ ] **Agent-to-agent message validation** — messages passed between LangGraph nodes are
+      untyped `dict`; introduce a `AgentMessage` Pydantic model for tool results,
+      specialist outputs, and supervisor decisions; catches shape mismatches at node boundary
+- [ ] **State schema enforcement** — `TaxEmailState` is a `TypedDict`; LangGraph does not
+      enforce it at runtime; migrate to a Pydantic `BaseModel` state and configure
+      `StateGraph(state_schema=TaxEmailState)` with strict validation
+
+### Runtime enforcement
+- [ ] **Tool access control per agent** — `AgentConfig.tools` is declared in manifest but
+      `ManifestExecutor` passes all registered tools to every specialist; enforce that
+      each specialist only receives tools listed in its manifest `tools:` field
+- [ ] **Policy evaluation span** — policy check node runs post-execution silently;
+      wrap in a Langfuse span so policy decisions are visible in traces
+- [ ] **Config-driven tracing** — replace manual `lf_trace.generation(...)` calls in
+      `ManifestExecutor` nodes with `LangfuseCallbackHandler`; reduces boilerplate and
+      ensures all LLM calls are captured automatically
 
 ## Phase 8 — RAG Search Example
 *Goal: validate manifest + linear pattern; second reference app.*
@@ -100,20 +135,24 @@
 - [ ] Validates `ManifestExecutor` works across patterns (not just router + concurrent)
 
 ## Phase 9 — Graph Compliance Example
-*Goal: validate supervisor pattern; test user-delegated identity.*
+*Goal: validate supervisor pattern with user-delegated identity; third reference app.*
 
 - [ ] `examples/graph_compliance` using the **supervisor** pattern
 - [ ] Microsoft Graph API tool with user-delegated Entra identity
 - [ ] Tests the `identity_mode: user_delegated` flow end-to-end
+- [ ] Note: supervisor pattern now proven by em-008; this phase validates it against
+      the Graph Compliance use case and user-delegated identity specifically
 
-## Phase 10 — Azure Deployment (dev environment)
+## Phase 10 — Azure Deployment (dev environment) ✅
 *Goal: full stack running on Azure Container Apps (ACA) in a single dev environment.*
 
-- [ ] Provision `rg-ao-dev` and run `terraform apply -var-file=environments/dev.tfvars`
-- [ ] Store secrets in `kv-ao-dev` (OpenAI key, Langfuse keys, postgres password)
-- [ ] Build and push all three images to ACR; CI/CD auto-deploys on push to `main`
-- [ ] Smoke test: process em-006 end-to-end against Azure-hosted stack
-- [ ] Verify Langfuse Cloud traces are visible for the deployed run
+- [x] Provision `rg-ao-dev` and run `terraform apply -var-file=environments/dev.tfvars`
+- [x] Store secrets in `kv-ao-dev` (OpenAI key, Langfuse keys, postgres password)
+- [x] Build and push all three images to ACR; CI/CD (`ci.yml`) auto-deploys on push to `main`
+- [x] `lifecycle { ignore_changes = [image] }` on all ACA apps — CI-deployed images
+      no longer reverted by `terraform apply`
+- [x] Smoke test: em-006 end-to-end against Azure-hosted stack
+- [x] Langfuse Cloud traces verified for deployed runs
 
 ---
 
@@ -122,8 +161,14 @@
 | Capability | Declared | SDK | API | Dashboard | Enforced at runtime |
 |---|---|---|---|---|---|
 | Agent declaration (YAML) | ✅ | ✅ | — | — | ✅ |
-| Tool declaration (YAML) | ✅ | ✅ | ✅ | ✅ | ❌ *not wired* |
-| Tool access per agent | ✅ | ✅ | ✅ | ✅ | ❌ *not enforced* |
-| Policy CRUD | ✅ | ✅ | ✅ | ✅ | ✅ *loaded at startup* |
+| Tool declaration (YAML) | ✅ | ✅ | ✅ | ✅ | ❌ per-agent not enforced |
+| Tool access per agent | ✅ | ✅ | ✅ | ✅ | ❌ all tools passed to all specialists |
+| Tool input/output validation | ✅ schema declared | raw dict | — | — | ❌ no Pydantic validation |
+| Agent message validation | — | — | — | — | ❌ untyped dict between nodes |
+| Policy CRUD | ✅ | ✅ | ✅ | ✅ | ✅ loaded at startup |
 | HITL approval flow | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Langfuse tracing | ✅ | ✅ | — | link | ✅ *manual spans* |
+| Langfuse tracing | ✅ | ✅ | — | link | ✅ manual spans (not callback handler) |
+| Service Bus (dead-letter) | ✅ handler exists | ✅ | — | — | ❌ not wired to live path |
+| Redis | ✅ provisioned | — | — | — | ❌ not used |
+| Scratchpad reasoning (CoT) | ✅ | ✅ `show_reasoning` | — | accordion UI | ✅ gpt-4.1-mini |
+| Native reasoning (o1/o3/o4) | ADR-009 planned | — | — | — | ❌ not implemented |
