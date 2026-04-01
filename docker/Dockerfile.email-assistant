@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir \
     uvicorn[standard] \
     python-multipart \
     python-dotenv \
-    python-json-logger
+    python-json-logger \
+    httpx
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app

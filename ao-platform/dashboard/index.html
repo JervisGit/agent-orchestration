@@ -12,14 +12,12 @@
       --border: #3f3f46;
       --text: #fafafa;
       --text2: #a1a1aa;
-      --accent: #6366f1;
-      --accent2: #818cf8;
+      --accent: #0078d4;
+      --accent2: #106ebe;
       --green: #22c55e;
       --yellow: #eab308;
       --red: #ef4444;
-      --blue: #3b82f6;
-      --purple: #a855f7;
-      --orange: #f97316;
+      --blue: #0078d4;
       --radius: 10px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -43,7 +41,7 @@
       padding: 0 20px 20px;
       font-size: 18px;
       font-weight: 700;
-      color: var(--accent2);
+      color: var(--accent);
       border-bottom: 1px solid var(--border);
       margin-bottom: 12px;
     }
@@ -65,7 +63,7 @@
       gap: 10px;
     }
     .nav-item:hover { color: var(--text); background: var(--surface2); }
-    .nav-item.active { color: var(--accent2); background: rgba(99,102,241,0.1); border-right: 2px solid var(--accent); }
+    .nav-item.active { color: var(--accent); background: rgba(0,120,212,0.1); border-right: 2px solid var(--accent); }
 
     .main { flex: 1; padding: 28px 32px; overflow-y: auto; }
 
@@ -85,9 +83,9 @@
     .stat-card-label { font-size: 12px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
     .stat-card-value { font-size: 28px; font-weight: 700; }
     .stat-card-value.green { color: var(--green); }
-    .stat-card-value.blue { color: var(--blue); }
+    .stat-card-value.blue { color: var(--accent); }
     .stat-card-value.yellow { color: var(--yellow); }
-    .stat-card-value.purple { color: var(--purple); }
+    .stat-card-value.purple { color: var(--accent); }
 
     /* Tables */
     .table-container {
@@ -132,10 +130,9 @@
       display: inline-block;
     }
     .badge-green { background: rgba(34,197,94,0.15); color: var(--green); }
-    .badge-blue { background: rgba(59,130,246,0.15); color: var(--blue); }
+    .badge-blue { background: rgba(0,120,212,0.15); color: var(--accent); }
     .badge-yellow { background: rgba(234,179,8,0.15); color: var(--yellow); }
     .badge-red { background: rgba(239,68,68,0.15); color: var(--red); }
-    .badge-purple { background: rgba(168,85,247,0.15); color: var(--purple); }
     .badge-neutral { background: var(--surface2); color: var(--text2); }
 
     /* Buttons */
@@ -151,7 +148,7 @@
     }
     .btn-sm { font-size: 11px; padding: 4px 10px; }
     .btn-primary { background: var(--accent); color: white; }
-    .btn-primary:hover { background: #4f46e5; }
+    .btn-primary:hover { background: var(--accent2); }
     .btn-green { background: rgba(34,197,94,0.15); color: var(--green); border: 1px solid rgba(34,197,94,0.3); }
     .btn-green:hover { background: rgba(34,197,94,0.25); }
     .btn-red { background: rgba(239,68,68,0.15); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
@@ -209,7 +206,7 @@
     .tl-step:last-child { border-bottom: none; }
     .tl-icon { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; margin-top: 1px; }
     .tl-icon.green { background: rgba(34,197,94,0.2); color: var(--green); }
-    .tl-icon.blue  { background: rgba(59,130,246,0.2); color: var(--blue); }
+    .tl-icon.blue  { background: rgba(0,120,212,0.2); color: var(--accent); }
     .tl-icon.red   { background: rgba(239,68,68,0.2); color: var(--red); }
     .tl-icon.yellow{ background: rgba(234,179,8,0.2); color: var(--yellow); }
     .tl-label { font-weight: 500; }
@@ -248,12 +245,12 @@
         AO Dashboard
         <small>Agent Orchestration Platform</small>
       </div>
-      <div class="nav-item active" data-page="overview" onclick="showPage('overview')">📊 Overview</div>
-      <div class="nav-item" data-page="workflows" onclick="showPage('workflows')">🔄 Workflows</div>
-      <div class="nav-item" data-page="hitl" onclick="showPage('hitl')">✋ HITL Approvals</div>
-      <div class="nav-item" data-page="policies" onclick="showPage('policies')">🛡️ Policies</div>
-      <div class="nav-item" data-page="apps" onclick="showPage('apps')">📦 DSAI Apps</div>
-      <div class="nav-item" data-page="traces" onclick="showPage('traces')">🔍 Traces</div>
+      <div class="nav-item active" data-page="overview" onclick="showPage('overview')">Overview</div>
+      <div class="nav-item" data-page="workflows" onclick="showPage('workflows')">Workflows</div>
+      <div class="nav-item" data-page="hitl" onclick="showPage('hitl')">HITL Approvals</div>
+      <div class="nav-item" data-page="policies" onclick="showPage('policies')">Policies</div>
+      <div class="nav-item" data-page="apps" onclick="showPage('apps')">DSAI Apps</div>
+      <div class="nav-item" data-page="traces" onclick="showPage('traces')">Traces</div>
     </div>
 
     <div class="main">
@@ -347,33 +344,22 @@
       <div id="page-apps" class="hidden">
         <div class="page-header">
           <div class="page-title">DSAI Applications</div>
-          <div class="page-subtitle">Apps using the Agent Orchestration layer</div>
+          <div class="page-subtitle">Apps registered on the Agent Orchestration layer</div>
         </div>
-        <div class="app-tiles">
-          <div class="app-tile" onclick="window.open('/email-assistant/', '_blank')">
-            <h4>📨 Email Assistant</h4>
-            <p>Classifies inbound emails, routes to specialist agents, drafts replies with policy enforcement.</p>
-            <div class="app-tile-meta">
-              <span class="badge badge-green">Running</span>
-              <span class="badge badge-neutral">Concurrent Pattern</span>
-              <span class="badge badge-blue">5 specialists</span>
+        <div style="margin-bottom: 16px;">
+          <button class="btn-primary" onclick="showUploadManifest()">+ Upload Manifest</button>
+        </div>
+        <div id="apps-tiles" class="app-tiles"></div>
+        <div id="apps-empty" class="empty-state hidden">No apps registered. Upload an ao-manifest.yaml to get started.</div>
+
+        <!-- App detail drawer -->
+        <div id="app-detail" class="hidden">
+          <div class="table-container" style="margin-top:16px">
+            <div class="table-header" style="justify-content:space-between">
+              <h3 id="app-detail-title">App Detail</h3>
+              <button class="btn-outline btn-sm" onclick="closeAppDetail()">Close</button>
             </div>
-          </div>
-          <div class="app-tile">
-            <h4>🔍 RAG Search</h4>
-            <p>Retrieval-augmented search over company documents with pgvector embeddings.</p>
-            <div class="app-tile-meta">
-              <span class="badge badge-yellow">Coming Soon</span>
-              <span class="badge badge-neutral">Linear Pattern</span>
-            </div>
-          </div>
-          <div class="app-tile">
-            <h4>📋 Graph Compliance</h4>
-            <p>Multi-agent compliance checks using Microsoft Graph API with user-delegated identity.</p>
-            <div class="app-tile-meta">
-              <span class="badge badge-yellow">Coming Soon</span>
-              <span class="badge badge-neutral">Supervisor Pattern</span>
-            </div>
+            <div id="app-detail-body" style="padding:16px 18px"></div>
           </div>
         </div>
       </div>
@@ -383,7 +369,7 @@
         <div class="page-header">
           <div class="page-title">Traces</div>
           <div class="page-subtitle">Per-email processing traces from the Tax Email Assistant
-            — <a href="http://localhost:3000" target="_blank" style="color:var(--accent2);text-decoration:none">Open Langfuse ↗</a>
+            — <a href="http://localhost:3000" target="_blank" style="color:var(--accent);text-decoration:none">Open Langfuse ↗</a>
           </div>
         </div>
         <div class="table-container">
@@ -428,6 +414,27 @@
       <div class="form-actions">
         <button class="btn-outline" onclick="closeModal('modal-workflow')">Cancel</button>
         <button class="btn-primary" onclick="createWorkflow()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload Manifest Modal -->
+  <div class="modal-overlay hidden" id="modal-manifest">
+    <div class="modal" style="width:540px">
+      <h3>Upload App Manifest</h3>
+      <div class="form-group">
+        <label>App ID</label>
+        <input id="manifest-app-id" placeholder="e.g. tax_email_assistant">
+      </div>
+      <div class="form-group">
+        <label>Manifest YAML</label>
+        <textarea id="manifest-yaml" rows="12"
+          style="width:100%;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;font-family:monospace;resize:vertical"
+          placeholder="Paste ao-manifest.yaml content here"></textarea>
+      </div>
+      <div class="form-actions">
+        <button class="btn-outline" onclick="closeModal('modal-manifest')">Cancel</button>
+        <button class="btn-primary" onclick="uploadManifest()">Upload</button>
       </div>
     </div>
   </div>
@@ -481,6 +488,7 @@
       if (page === 'workflows') loadWorkflows();
       if (page === 'hitl')      loadHITL();
       if (page === 'policies')  loadPolicies();
+      if (page === 'apps')      loadApps();
       if (page === 'traces')    loadTraces();
     }
 
@@ -550,8 +558,8 @@
       }
       empty.classList.add('hidden');
       const patternBadge = p => ({
-        linear: 'badge-blue', router: 'badge-green', supervisor: 'badge-purple', planner: 'badge-yellow',
-        concurrent: 'badge-green', magentic: 'badge-green', handoff: 'badge-green',
+        linear: 'badge-blue', router: 'badge-blue', supervisor: 'badge-blue', planner: 'badge-blue',
+        concurrent: 'badge-blue', magentic: 'badge-blue', handoff: 'badge-blue',
       })[p] || 'badge-neutral';
       tbody.innerHTML = wfs.map(w => `<tr>
         <td style="font-weight:600">${esc(w.workflow_id)}</td>
@@ -640,7 +648,7 @@
                   &nbsp;·&nbsp; Penalty count: <strong style="color:var(--red)">${tpPen}</strong>
                 </div>
                 <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">Proposed action</div>
-                <div style="background:rgba(234,179,8,.08);border:1px solid rgba(234,179,8,.3);border-radius:6px;padding:10px 14px;font-size:13px;margin-bottom:12px">${action}</div>
+                <div style="background:rgba(0,120,212,.08);border:1px solid rgba(0,120,212,.3);border-radius:6px;padding:10px 14px;font-size:13px;margin-bottom:12px">${action}</div>
                 <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">AI-drafted reply (pending approval)</div>
                 <pre style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:12px;white-space:pre-wrap;font-family:inherit;margin:0">${draft}</pre>
               </div>
@@ -694,8 +702,8 @@
         return;
       }
       empty.classList.add('hidden');
-      const stageBadge = s => ({ pre_execution:'badge-blue', post_execution:'badge-green', runtime:'badge-yellow' })[s] || 'badge-neutral';
-      const actionBadge = a => ({ block:'badge-red', redact:'badge-yellow', warn:'badge-purple', log:'badge-neutral' })[a] || 'badge-neutral';
+      const stageBadge = s => ({ pre_execution:'badge-blue', post_execution:'badge-blue', runtime:'badge-yellow' })[s] || 'badge-neutral';
+      const actionBadge = a => ({ block:'badge-red', redact:'badge-yellow', warn:'badge-neutral', log:'badge-neutral' })[a] || 'badge-neutral';
       tbody.innerHTML = pols.map(p => `<tr>
         <td>${esc(p.app_id)}</td>
         <td style="font-weight:600">${esc(p.name)}</td>
@@ -731,14 +739,14 @@
     const LANGFUSE_URL = 'http://localhost:3000';
 
     const STEP_ICONS = {
-      lookup_taxpayer: { icon: '🗄', cls: 'blue',   label: 'DB lookup' },
-      classify:        { icon: '🧠', cls: 'blue',   label: 'Classify' },
-      filing_extension:    { icon: '📋', cls: 'green', label: 'Filing Extension agent' },
-      payment_arrangement: { icon: '💳', cls: 'green', label: 'Payment Arrangement agent' },
-      assessment_relief:   { icon: '⚖️', cls: 'green', label: 'Assessment Relief agent' },
-      penalty_waiver:      { icon: '🔖', cls: 'green', label: 'Penalty Waiver agent' },
-      general_inquiry:     { icon: '💬', cls: 'green', label: 'General Inquiry agent' },
-      policy_check:        { icon: '🛡', cls: 'yellow', label: 'Policy check' },
+      lookup_taxpayer:     { icon: 'DB',  cls: 'blue',   label: 'DB lookup' },
+      classify:            { icon: 'CL',  cls: 'blue',   label: 'Classify' },
+      filing_extension:    { icon: 'FE',  cls: 'green',  label: 'Filing Extension agent' },
+      payment_arrangement: { icon: 'PA',  cls: 'green',  label: 'Payment Arrangement agent' },
+      assessment_relief:   { icon: 'AR',  cls: 'green',  label: 'Assessment Relief agent' },
+      penalty_waiver:      { icon: 'PW',  cls: 'green',  label: 'Penalty Waiver agent' },
+      general_inquiry:     { icon: 'GI',  cls: 'green',  label: 'General Inquiry agent' },
+      policy_check:        { icon: 'PC',  cls: 'yellow', label: 'Policy check' },
     };
 
     let _tracesExpanded = new Set();
@@ -773,7 +781,7 @@
           ? `<span class="badge badge-red">Required</span>`
           : `<span class="badge badge-neutral">—</span>`;
         const lf = t.langfuse_url
-          ? `<a href="${esc(t.langfuse_url)}" target="_blank" style="color:var(--accent2);font-size:12px">Langfuse ↗</a>`
+          ? `<a href="${esc(t.langfuse_url)}" target="_blank" style="color:var(--accent);font-size:12px">Langfuse ↗</a>`
           : `<span style="color:var(--text2);font-size:12px">${esc(t.trace_id?.slice(0,8))}...</span>`;
 
         const expanded = _tracesExpanded.has(t.trace_id);
@@ -846,10 +854,98 @@
     }
 
     function catColor(c) {
-      return { filing_extension:'blue', payment_arrangement:'orange', assessment_relief:'purple',
-               penalty_waiver:'red', general_inquiry:'green' }[c] || 'neutral';
+      return { filing_extension:'blue', payment_arrangement:'blue', assessment_relief:'blue',
+               penalty_waiver:'red', general_inquiry:'neutral' }[c] || 'neutral';
     }
     function fmtCat(c) { return c ? c.replace(/_/g,' ').replace(/\b\w/g,x=>x.toUpperCase()) : ''; }
+
+    // ── DSAI Apps ──────────────────────────────────────────
+    async function loadApps() {
+      const data = await api('/apps/');
+      const apps = data?.apps ?? [];
+      const tiles  = document.getElementById('apps-tiles');
+      const empty  = document.getElementById('apps-empty');
+      closeAppDetail();
+      if (apps.length === 0) {
+        tiles.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+      tiles.innerHTML = apps.map(a => `
+        <div class="app-tile" onclick="loadAppDetail('${esc(a.app_id)}')">
+          <h4>${esc(a.display_name)}</h4>
+          <p>${esc(a.description || '\u2014')}</p>
+          <div class="app-tile-meta">
+            <span class="badge badge-blue">${esc(a.pattern)}</span>
+            <span class="badge badge-neutral">${a.agent_count ?? 0} agent${(a.agent_count ?? 0) === 1 ? '' : 's'}</span>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function loadAppDetail(appId) {
+      const app = await api(`/apps/${appId}`);
+      if (!app) return;
+      document.getElementById('app-detail-title').textContent = app.display_name || appId;
+      const agents = app.agents ?? [];
+      const tools  = app.tools  ?? [];
+      const agentRows = agents.length === 0
+        ? '<p style="color:var(--text2);font-size:13px">No agents registered.</p>'
+        : `<table style="width:100%;border-collapse:collapse">
+            <thead><tr>
+              <th style="text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text2);padding:8px 0;border-bottom:1px solid var(--border)">Agent</th>
+              <th style="text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text2);padding:8px 0;border-bottom:1px solid var(--border)">Model</th>
+              <th style="text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text2);padding:8px 0;border-bottom:1px solid var(--border)">Tools</th>
+              <th style="text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text2);padding:8px 0;border-bottom:1px solid var(--border)">HITL Condition</th>
+            </tr></thead>
+            <tbody>${agents.map(ag => `<tr>
+              <td style="padding:8px 0;font-size:13px;border-bottom:1px solid var(--border);font-weight:600">${esc(ag.agent_name)}</td>
+              <td style="padding:8px 0;font-size:12px;border-bottom:1px solid var(--border);color:var(--text2)">${esc(ag.model || '\u2014')}</td>
+              <td style="padding:8px 0;font-size:12px;border-bottom:1px solid var(--border)">
+                ${(ag.tool_names ?? []).length === 0
+                  ? '<span style="color:var(--text2)">None</span>'
+                  : (ag.tool_names).map(t => `<span class="badge badge-blue" style="margin-right:4px">${esc(t)}</span>`).join('')}
+              </td>
+              <td style="padding:8px 0;font-size:12px;border-bottom:1px solid var(--border);color:var(--text2)">${esc(ag.hitl_condition || '\u2014')}</td>
+            </tr>`).join('')}</tbody>
+          </table>`;
+      const toolRows = tools.length === 0
+        ? '<p style="color:var(--text2);font-size:13px;margin-top:16px">No tools registered.</p>'
+        : `<div style="margin-top:16px">
+            <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text2);margin-bottom:8px">Registered Tools</div>
+            ${tools.map(t => `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)">
+              <span class="badge badge-blue">${esc(t.type)}</span>
+              <span style="font-size:13px;font-weight:600">${esc(t.name)}</span>
+              <span style="font-size:12px;color:var(--text2);flex:1">${esc(t.description || '')}</span>
+              ${t.endpoint ? `<code style="font-size:11px;color:var(--text2)">${esc(t.endpoint)}</code>` : ''}
+            </div>`).join('')}
+          </div>`;
+      document.getElementById('app-detail-body').innerHTML = agentRows + toolRows;
+      document.getElementById('app-detail').classList.remove('hidden');
+    }
+
+    function closeAppDetail() {
+      document.getElementById('app-detail').classList.add('hidden');
+    }
+
+    function showUploadManifest() {
+      document.getElementById('modal-manifest').classList.remove('hidden');
+    }
+
+    async function uploadManifest() {
+      const appId = document.getElementById('manifest-app-id').value.trim();
+      const yaml  = document.getElementById('manifest-yaml').value.trim();
+      if (!appId || !yaml) return;
+      const result = await api(`/apps/${appId}/manifest`, {
+        method: 'POST',
+        body: JSON.stringify({ manifest_yaml: yaml }),
+      });
+      closeModal('modal-manifest');
+      document.getElementById('manifest-app-id').value = '';
+      document.getElementById('manifest-yaml').value   = '';
+      if (result) loadApps();
+    }
 
     // ── Misc utils ─────────────────────────────────────────
     function closeModal(id) { document.getElementById(id).classList.add('hidden'); }

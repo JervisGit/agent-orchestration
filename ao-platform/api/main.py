@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routes import hitl, policies, workflows
+from api.routes import apps, hitl, policies, tools, workflows
 
 # ── Structured JSON logging ─────────────────────────────────────────
 def _configure_logging() -> None:
@@ -34,8 +34,10 @@ app = FastAPI(title="Agent Orchestration Platform", version="0.1.0")
 
 # Register routers
 app.include_router(workflows.router, prefix="/api/workflows", tags=["workflows"])
-app.include_router(hitl.router, prefix="/api/hitl", tags=["hitl"])
-app.include_router(policies.router, prefix="/api/policies", tags=["policies"])
+app.include_router(hitl.router,      prefix="/api/hitl",      tags=["hitl"])
+app.include_router(policies.router,  prefix="/api/policies",  tags=["policies"])
+app.include_router(tools.router,     prefix="/api/tools",     tags=["tools"])
+app.include_router(apps.router,      prefix="/api/apps",      tags=["apps"])
 
 # Dashboard static files
 DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "dashboard"

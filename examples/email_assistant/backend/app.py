@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypedDict
 
+import httpx
 import psycopg
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -42,7 +43,9 @@ from ao.policy.schema import PolicySet
 load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=True)
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 MANIFEST_PATH = Path(__file__).parent.parent / "ao-manifest.yaml"
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://ao:localdev@localhost:5432/ao")
+DATABASE_URL    = os.getenv("DATABASE_URL",    "postgresql://ao:localdev@localhost:5432/ao")
+PLATFORM_URL    = os.getenv("AO_PLATFORM_URL", "http://localhost:8000")
+APP_ID          = "tax_email_assistant"
 
 # ── Structured JSON logging ─────────────────────────────────────────
 def _configure_logging() -> None:
@@ -128,7 +131,8 @@ STEP_LABELS: dict[str, str] = {
 # ── Policy engine ───────────────────────────────────────────────────
 policy_engine = PolicyEngine()
 policy_engine.register_builtin_rules()
-policies = PolicySet.from_yaml("""
+
+_POLICY_YAML_FALLBACK = """
 policies:
   - name: pii_filter
     stage: post_execution
@@ -139,7 +143,31 @@ policies:
   - name: tax_accuracy
     stage: post_execution
     action: warn
-""")
+"""
+policies: PolicySet = PolicySet.from_yaml(_POLICY_YAML_FALLBACK)
+
+
+async def _load_policies_from_platform(app_id: str) -> PolicySet | None:
+    """Fetch policies from the AO Platform API; return None on any failure."""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(
+                f"{PLATFORM_URL}/api/policies/",
+                params={"app_id": app_id},
+            )
+            resp.raise_for_status()
+            pols = (resp.json() or {}).get("policies", [])
+            if not pols:
+                return None
+            yaml_lines = ["policies:"]
+            for p in pols:
+                yaml_lines.append(f"  - name: {p['name']}")
+                yaml_lines.append(f"    stage: {p['stage']}")
+                yaml_lines.append(f"    action: {p['action']}")
+            return PolicySet.from_yaml("\n".join(yaml_lines))
+    except Exception as exc:
+        logger.warning("Could not load policies from AO Platform: %s", exc)
+        return None
 
 # ── App-specific state schema ────────────────────────────────────────
 
@@ -455,6 +483,7 @@ class ProcessResult(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global policies
     db_ok = False
     try:
         async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
@@ -462,6 +491,15 @@ async def lifespan(app: FastAPI):
         db_ok = True
     except Exception as exc:
         logger.warning("PostgreSQL unavailable: %s", exc)
+
+    # Try to load policies from the AO Platform API; fall back to hardcoded defaults
+    platform_policies = await _load_policies_from_platform(APP_ID)
+    if platform_policies:
+        policies = platform_policies
+        logger.info("Loaded %d policies from AO Platform", len(policies.policies))
+    else:
+        logger.info("Using fallback hardcoded policies (%d)", len(policies.policies))
+
     print(
         f"Tax Email Assistant ready — LLM: {type(llm).__name__}, "
         f"DB: {'connected' if db_ok else 'OFFLINE — taxpayer lookup disabled'}, "

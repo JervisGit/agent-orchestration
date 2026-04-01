@@ -16,7 +16,8 @@ RUN pip install --no-cache-dir \
     fastapi \
     uvicorn[standard] \
     python-multipart \
-    python-json-logger
+    python-json-logger \
+    pyyaml
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app

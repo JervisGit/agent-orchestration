@@ -74,6 +74,50 @@ CREATE TABLE IF NOT EXISTS ao_hitl_requests (
     resolved_at TIMESTAMPTZ
 );
 
+-- ── AO Platform: tool registry ────────────────────────────────
+CREATE TABLE IF NOT EXISTS ao_tools (
+    id                 SERIAL          PRIMARY KEY,
+    app_id             VARCHAR(100),
+    name               VARCHAR(100),
+    type               VARCHAR(50)     DEFAULT 'custom',
+    description        TEXT,
+    endpoint           TEXT,
+    connection_secret  VARCHAR(200),
+    params             JSONB           DEFAULT '{}',
+    created_at         TIMESTAMPTZ     DEFAULT NOW(),
+    UNIQUE(app_id, name)
+);
+
+-- ── AO Platform: registered apps ───────────────────────────────
+CREATE TABLE IF NOT EXISTS ao_apps (
+    app_id         VARCHAR(100)    PRIMARY KEY,
+    display_name   VARCHAR(200),
+    description    TEXT,
+    pattern        VARCHAR(50),
+    manifest_yaml  TEXT,
+    created_at     TIMESTAMPTZ     DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ     DEFAULT NOW()
+);
+
+-- ── AO Platform: app agents (from manifest) ─────────────────────
+CREATE TABLE IF NOT EXISTS ao_app_agents (
+    id             SERIAL          PRIMARY KEY,
+    app_id         VARCHAR(100)    REFERENCES ao_apps(app_id) ON DELETE CASCADE,
+    agent_name     VARCHAR(100),
+    model          VARCHAR(100),
+    tool_names     TEXT[]          DEFAULT '{}',
+    hitl_condition TEXT,
+    created_at     TIMESTAMPTZ     DEFAULT NOW(),
+    UNIQUE(app_id, agent_name)
+);
+
+-- ── Seed: default apps ──────────────────────────────────────────
+INSERT INTO ao_apps (app_id, display_name, description, pattern) VALUES
+('tax_email_assistant', 'Tax Email Assistant', 'Routes taxpayer emails to specialist agents with guardrail policy enforcement.', 'concurrent'),
+('rag_search',          'RAG Search',          'Retrieval-augmented search over company documents with pgvector embeddings.',       'linear'),
+('graph_compliance',    'Graph Compliance',    'Multi-agent compliance checks using Microsoft Graph API with user-delegated identity.', 'supervisor')
+ON CONFLICT DO NOTHING;
+
 -- ── Seed: default workflows for the AO Dashboard ──────────────
 INSERT INTO ao_workflows (workflow_id, app_id, pattern, description) VALUES
 ('email-triage-v1',    'tax_email_assistant','router',    'Routes taxpayer emails to specialist agents by inquiry category'),
