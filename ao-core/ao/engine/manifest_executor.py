@@ -78,6 +78,7 @@ from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Any
 
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
 from ao.config.manifest import AgentConfig, AppManifest
@@ -106,10 +107,15 @@ class ManifestExecutor:
         self._pre_steps: list[tuple[str, Callable]] = []
         self._compiled: Any = None
         self._active_traces: dict[str, Any] = {}
-        # name -> (callable, openai_function_schema)
-        self._tools: dict[str, tuple[Callable, dict]] = {}
+        # name -> (callable, ToolSchema)
+        self._tools: dict[str, tuple[Callable, ToolSchema]] = {}
         # trace_id -> asyncio.Queue for token streaming
         self._token_queues: dict[str, asyncio.Queue] = {}
+        # trace_id -> asyncio.Event; set to request cancellation mid-stream
+        self._cancel_events: dict[str, asyncio.Event] = {}
+        # Shared MemorySaver checkpointer — persists node-level state per thread_id
+        # so an interrupted run can resume from the last completed node.
+        self._checkpointer = MemorySaver()
 
     # ── Registration ────────────────────────────────────────────────
 
@@ -151,6 +157,23 @@ class ManifestExecutor:
 
     def clear_token_stream(self, trace_id: str) -> None:
         self._token_queues.pop(trace_id, None)
+
+    def cancel_stream(self, trace_id: str) -> None:
+        """Request cancellation of an active astream() run.
+
+        The executor checks this flag between LangGraph node boundaries.
+        The current node finishes cleanly before the stream exits, so partial
+        state is always at a consistent node boundary.
+        """
+        event = self._cancel_events.get(trace_id)
+        if event:
+            event.set()
+            logger.info("Cancellation requested for trace %s", trace_id)
+
+    def is_cancelled(self, trace_id: str) -> bool:
+        """Return True if cancellation has been requested for trace_id."""
+        event = self._cancel_events.get(trace_id)
+        return event is not None and event.is_set()
 
     # ── Tool helpers ─────────────────────────────────────────────────
 
@@ -254,6 +277,10 @@ class ManifestExecutor:
     def compile(self, state_schema: type = RouterState) -> Any:
         """Build and compile the LangGraph from the manifest.
 
+        The graph is compiled with the shared MemorySaver checkpointer so that
+        state is saved after every node.  Pass thread_id in the LangGraph config
+        (via astream / ainvoke) to enable resume after interruption.
+
         Returns the compiled graph (same object returned by StateGraph.compile()).
         Also stored as self._compiled for use by astream()/ainvoke().
         """
@@ -314,7 +341,7 @@ class ManifestExecutor:
             {name: name for name in specialists_cfg},
         )
 
-        self._compiled = graph.compile()
+        self._compiled = graph.compile(checkpointer=self._checkpointer)
         logger.info(
             "ManifestExecutor compiled '%s' (router pattern, %d agents, %d pre-steps)",
             self._manifest.app_id, len(self._manifest.agents), len(self._pre_steps),
@@ -373,7 +400,7 @@ class ManifestExecutor:
         graph.add_edge("dispatch", "merge")
         graph.add_edge("merge", END)
 
-        self._compiled = graph.compile()
+        self._compiled = graph.compile(checkpointer=self._checkpointer)
         logger.info(
             "ManifestExecutor compiled '%s' (concurrent pattern, %d intent agents, %d pre-steps)",
             self._manifest.app_id, len(specialists_cfg), len(self._pre_steps),
@@ -385,20 +412,43 @@ class ManifestExecutor:
     async def astream(self, state: dict, **kwargs) -> AsyncGenerator:
         """Stream workflow updates. Opens/closes a Langfuse trace around the run.
 
+        Passes thread_id = state["email_id"] (or trace_id) to the LangGraph
+        checkpointer so that state is saved after every node and a cancelled run
+        can be resumed by calling astream() again with the same state.
+
         Yields the same chunks as compiled_graph.astream().
+        Raises CancelledError-equivalent by stopping iteration if cancel_stream()
+        is called — the current node always finishes cleanly first.
         """
         if self._compiled is None:
             raise RuntimeError("Call compile() before astream().")
 
         trace_id: str = state.get("trace_id") or str(uuid.uuid4())
+        thread_id: str = state.get("email_id") or trace_id
+
+        # Register cancel event for this run
+        cancel_event = asyncio.Event()
+        self._cancel_events[trace_id] = cancel_event
+
         self._open_trace(trace_id, state)
 
+        # thread_id enables MemorySaver to checkpoint per email and resume
+        lg_config = {"configurable": {"thread_id": thread_id}}
+
         try:
-            async for chunk in self._compiled.astream(state, **kwargs):
+            async for chunk in self._compiled.astream(state, config=lg_config, **kwargs):
                 yield chunk
+                # Check cancellation between node boundaries (after each node completes)
+                if cancel_event.is_set():
+                    logger.info(
+                        "Stream cancelled at node boundary for trace %s (thread %s)",
+                        trace_id, thread_id,
+                    )
+                    break
         finally:
             self._close_trace(trace_id, state)
             self.clear_token_stream(trace_id)
+            self._cancel_events.pop(trace_id, None)
             # Signal end of stream to any token queue consumer
             q = self._token_queues.get(trace_id)
             if q:
@@ -413,10 +463,12 @@ class ManifestExecutor:
             raise RuntimeError("Call compile() before ainvoke().")
 
         trace_id: str = state.get("trace_id") or str(uuid.uuid4())
+        thread_id: str = state.get("email_id") or trace_id
+        lg_config = {"configurable": {"thread_id": thread_id}}
         self._open_trace(trace_id, state)
 
         try:
-            result = await self._compiled.ainvoke(state, **kwargs)
+            result = await self._compiled.ainvoke(state, config=lg_config, **kwargs)
             return result
         finally:
             self._close_trace(trace_id, result if "result" in dir() else state)
@@ -1059,7 +1111,7 @@ class ManifestExecutor:
             {name: name for name in specialists_cfg} | {END: END},
         )
 
-        self._compiled = graph.compile()
+        self._compiled = graph.compile(checkpointer=self._checkpointer)
         logger.info(
             "ManifestExecutor compiled '%s' (supervisor pattern, %d specialists, %d pre-steps)",
             self._manifest.app_id, len(specialists_cfg), len(self._pre_steps),

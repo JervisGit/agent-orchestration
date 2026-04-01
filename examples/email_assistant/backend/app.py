@@ -131,6 +131,10 @@ _SUPERVISOR_MANIFEST_PATH = Path(__file__).parent.parent / "ao-manifest-supervis
 manifest_sv = AppManifest.from_yaml(_SUPERVISOR_MANIFEST_PATH)
 executor_sv = ManifestExecutor(manifest_sv, llm=llm, langfuse_client=langfuse_client)
 
+# ── Active stream tracking — email_id -> trace_id ───────────────────
+# Used by the /cancel endpoint to look up which executor + trace to stop.
+_active_streams: dict[str, str] = {}   # email_id -> trace_id
+
 # ── Step labels for SSE + Dashboard display ─────────────────────────
 STEP_LABELS: dict[str, str] = {
     "lookup_taxpayer":     "Looking up taxpayer record in database",
@@ -701,6 +705,30 @@ async def list_emails() -> list[EmailOut]:
         for e in emails_db.values()
     ]
 
+@app.post("/api/emails/{email_id}/cancel")
+async def cancel_email_stream(email_id: str):
+    """Cancel an in-progress stream for email_id.
+
+    The executor will stop between node boundaries — the current node always
+    completes cleanly, so partial state is always at a consistent checkpoint.
+    The email is marked 'interrupted' and its state is persisted to Redis so
+    a retry can display what was already completed.
+    """
+    trace_id = _active_streams.get(email_id)
+    if not trace_id:
+        raise HTTPException(status_code=404, detail="No active stream for this email")
+
+    email = emails_db.get(email_id)
+    if email:
+        active_exec = executor_sv if email.get("mode") == "supervisor" else executor
+        active_exec.cancel_stream(trace_id)
+        email["status"] = "interrupted"
+        await _persist_email_state(email_id, email)
+
+    logger.info("Cancel requested for email %s (trace %s)", email_id, trace_id)
+    return {"cancelled": True, "email_id": email_id, "trace_id": trace_id}
+
+
 @app.get("/api/emails/{email_id}/process/stream")
 async def process_email_stream(email_id: str):
     """SSE endpoint: streams step-by-step progress as the graph runs.
@@ -709,13 +737,19 @@ async def process_email_stream(email_id: str):
     email = emails_db.get(email_id)
     if not email:
         raise HTTPException(status_code=404, detail="Email not found")
+    if email["status"] not in ("new", "interrupted"):
+        raise HTTPException(status_code=409, detail=f"Email is already {email['status']}")
 
     async def generate():
         trace_id = str(uuid.uuid4())
-        logger.info("SSE stream starting for email %s (trace %s)", email_id, trace_id)
+        resuming = email["status"] == "interrupted"
+        logger.info(
+            "SSE stream starting for email %s (trace %s, resuming=%s)",
+            email_id, trace_id, resuming,
+        )
         full_text = f"From: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"
 
-        yield f"data: {json.dumps({'type': 'start', 'trace_id': trace_id})}\n\n"
+        yield f"data: {json.dumps({'type': 'start', 'trace_id': trace_id, 'resuming': resuming})}\n\n"
 
         initial_state: TaxEmailState = {
             "email_id": email_id, "sender": email["from"], "subject": email["subject"],
@@ -730,6 +764,10 @@ async def process_email_stream(email_id: str):
         active_executor = executor_sv if email.get("mode") == "supervisor" else executor
         token_queue: asyncio.Queue = asyncio.Queue(maxsize=512)
         active_executor.set_token_stream(trace_id, token_queue)
+
+        # Register so /cancel can signal this run
+        email["status"] = "processing"
+        _active_streams[email_id] = trace_id
 
         try:
             final_state: dict = dict(initial_state)
@@ -762,6 +800,10 @@ async def process_email_stream(email_id: str):
 
             # Await graph task and get node-level step events
             graph_steps = await graph_task
+
+            # Detect if the run was cancelled (executor stopped between nodes)
+            was_cancelled = active_executor.is_cancelled(trace_id)
+
             for node_name, updates in graph_steps:
                 final_state.update(updates)
                 # Skip nodes that already got a step event via the token/tool queue
@@ -784,6 +826,9 @@ async def process_email_stream(email_id: str):
                     detail = {"merged_from": list(so.keys())}
                 yield f"data: {json.dumps({'type': 'step', 'node': node_name, 'label': STEP_LABELS.get(node_name, node_name), 'detail': detail})}\n\n"
 
+            # Detect if the run was cancelled between node boundaries
+            was_cancelled = active_executor.is_cancelled(trace_id)
+
             # Post-execution policy check
             yield f"data: {json.dumps({'type': 'step', 'node': 'policy_check', 'label': STEP_LABELS['policy_check'], 'detail': {}})}\n\n"
             flags: list[str] = list(final_state.get("policy_flags", []))
@@ -805,6 +850,18 @@ async def process_email_stream(email_id: str):
             )
             hitl = final_state.get("hitl_required", False)
             category = _active_category(final_state)
+
+            # ── Cancelled path ─────────────────────────────────────
+            if was_cancelled:
+                email["status"] = "interrupted"
+                email["category"] = category or email.get("category")
+                email["policy_flags"] = flags
+                await _persist_email_state(email_id, email)
+                logger.info("Stream cancelled for email %s after %d nodes", email_id, len(graph_steps))
+                yield f"data: {json.dumps({'type': 'cancelled', 'email_id': email_id, 'nodes_completed': len(graph_steps)})}\n\n"
+                return
+
+            # ── Normal completion path ─────────────────────────────
             email["status"] = "processed"
             email["category"] = category
             email["draft_reply"] = final_state["output"]
@@ -859,6 +916,8 @@ async def process_email_stream(email_id: str):
             logger.exception("SSE stream error for email %s", email_id)
             asyncio.create_task(_send_dead_letter(email_id, str(exc), trace_id))
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+        finally:
+            _active_streams.pop(email_id, None)
 
     return StreamingResponse(
         generate(),

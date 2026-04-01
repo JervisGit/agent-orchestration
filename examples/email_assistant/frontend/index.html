@@ -167,6 +167,7 @@
     .status-new { background: rgba(0, 120, 212, 0.15); color: var(--accent); }
     .status-processing { background: rgba(234, 179, 8, 0.15); color: var(--yellow); }
     .status-processed { background: rgba(34, 197, 94, 0.15); color: var(--green); }
+    .status-interrupted { background: rgba(239, 68, 68, 0.12); color: var(--orange); }
 
     .email-subject {
       font-size: 14px;
@@ -404,6 +405,30 @@
       margin-top: 16px;
     }
 
+    .btn-stop {
+      padding: 6px 16px;
+      border-radius: 3px;
+      border: 1px solid var(--red);
+      background: rgba(239,68,68,0.1);
+      color: var(--red);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .btn-stop:hover { background: rgba(239,68,68,0.2); }
+
+    .btn-resume {
+      padding: 6px 16px;
+      border-radius: 3px;
+      border: 1px solid var(--orange);
+      background: rgba(249,115,22,0.1);
+      color: var(--orange);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .btn-resume:hover { background: rgba(249,115,22,0.2); }
+
     .progress-panel {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -590,7 +615,10 @@
       if (e.status === 'processing') {
         html += `
           <div class="progress-panel" id="progress-${e.id}">
-            <div class="progress-panel-label">Agent Workflow Progress</div>
+            <div class="progress-panel-label" style="display:flex;justify-content:space-between;align-items:center;">
+              <span>Agent Workflow Progress</span>
+              <button class="btn-stop" onclick="stopOne('${e.id}')">Stop</button>
+            </div>
             <div class="progress-step step-processing">
               <span class="step-icon"><span class="spinner"></span></span>
               <div class="step-label" style="color:var(--text2)">Initializing...</div>
@@ -658,6 +686,15 @@
             </button>
           </div>
         `;
+      } else if (e.status === 'interrupted') {
+        html += `
+          <div class="process-btn-inline" style="display:flex;gap:8px;align-items:center;">
+            <button class="btn-resume" onclick="processOne('${e.id}')">
+              Resume Processing
+            </button>
+            <span style="font-size:12px;color:var(--orange)">Stopped at a checkpoint — will continue from where it left off</span>
+          </div>
+        `;
       }
 
       detail.innerHTML = html;
@@ -665,7 +702,7 @@
 
     function processOne(id) {
       const email = emails.find(x => x.id === id);
-      if (!email || email.status !== 'new') return;
+      if (!email || !['new', 'interrupted'].includes(email.status)) return;
 
       email.status = 'processing';
       renderList();
@@ -795,6 +832,19 @@
             });
           }, 600);
 
+        } else if (data.type === 'cancelled') {
+          source.close();
+          panel?.querySelector('.step-processing')?.remove();
+          if (panel) {
+            const el = document.createElement('div');
+            el.className = 'progress-step';
+            el.innerHTML = `<span class="step-icon" style="color:var(--orange)">&#x25AA;</span><div class="step-label" style="color:var(--orange)">Stopped — ${data.nodes_completed} node(s) completed. Click Resume to continue.</div>`;
+            panel.appendChild(el);
+          }
+          const e = emails.find(x => x.id === id);
+          if (e) { e.status = 'interrupted'; renderList(); showDetail(id); }
+          showToast('Processing stopped at checkpoint', true);
+
         } else if (data.type === 'error') {
           source.close();
           panel?.querySelector('.step-processing')?.remove();
@@ -818,6 +868,15 @@
         if (e && e.status === 'processing') { e.status = 'new'; renderList(); showDetail(id); }
         showToast('Stream connection lost — check console for details', true);
       };
+    }
+
+    async function stopOne(id) {
+      try {
+        await fetchJSON(`/emails/${id}/cancel`, { method: 'POST' });
+        showToast('Stop requested — waiting for current node to finish...');
+      } catch (err) {
+        showToast(`Could not stop: ${err.message}`, true);
+      }
     }
 
     async function processAll() {
