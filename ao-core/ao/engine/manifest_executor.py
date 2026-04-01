@@ -178,6 +178,9 @@ class ManifestExecutor:
             except Exception:
                 pass
 
+        trace_id = state.get("trace_id", "")
+        token_queue = self._token_queues.get(trace_id)
+
         try:
             raw = await fn(**args) if asyncio.iscoroutinefunction(fn) else fn(**args)
         except Exception as exc:
@@ -196,6 +199,13 @@ class ManifestExecutor:
             try:
                 lf_span.end(output=content_str)
             except Exception:
+                pass
+
+        # Notify queue that tool call completed
+        if token_queue:
+            try:
+                token_queue.put_nowait({"node": f"tool:{tool_name}", "done": True})
+            except asyncio.QueueFull:
                 pass
 
         msg = {"role": "tool", "tool_call_id": call_id, "content": content_str}
@@ -488,6 +498,16 @@ class ManifestExecutor:
             # Only prepend _context if no tools registered (tools fetch context on demand)
             if ctx and not executor._tools:
                 parts.append(ctx)
+            # When tools are registered, prepend an explicit instruction so the LLM
+            # reliably calls the tool rather than inventing taxpayer data.
+            if executor._tools:
+                tool_names = list(executor._tools.keys())
+                parts.append(
+                    f"You have access to the following tools: {', '.join(tool_names)}.\n"
+                    "When the email contains a Tax Identification Number (TIN, format SG-T###-####), "
+                    "ALWAYS call 'lookup_taxpayer' BEFORE drafting your reply.\n"
+                    "Never guess or invent taxpayer data — only use the information returned by the tool."
+                )
             parts.append(cfg.system_prompt)
             if cfg.sop:
                 parts.append(f"SOP YOU MUST FOLLOW:\n{cfg.sop}")
@@ -694,6 +714,14 @@ class ManifestExecutor:
             ctx = state.get("_context", "")
             if ctx and not executor._tools:
                 parts.append(ctx)
+            if executor._tools:
+                tool_names = list(executor._tools.keys())
+                parts.append(
+                    f"You have access to the following tools: {', '.join(tool_names)}.\n"
+                    "When the email contains a Tax Identification Number (TIN, format SG-T###-####), "
+                    "ALWAYS call 'lookup_taxpayer' BEFORE drafting your reply.\n"
+                    "Never guess or invent taxpayer data — only use the information returned by the tool."
+                )
             parts.append(cfg.system_prompt)
             if cfg.sop:
                 parts.append(f"SOP YOU MUST FOLLOW:\n{cfg.sop}")
@@ -809,7 +837,11 @@ class ManifestExecutor:
             for r in results:
                 all_flags.extend(r["policy_flags"])
 
-            return {
+            # Propagate taxpayer (and _context) from first specialist that resolved it
+            taxpayer = next((r["taxpayer"] for r in results if r.get("taxpayer")), state.get("taxpayer"))
+            ctx_update = next((r["_context"] for r in results if r.get("_context")), state.get("_context", ""))
+
+            out: dict = {
                 "specialist_outputs": specialist_outputs,
                 "intents": valid,
                 "hitl_required": hitl_required,
@@ -818,7 +850,10 @@ class ManifestExecutor:
                 "messages": state.get("messages", []) + [
                     {"role": "dispatch", "content": f"Dispatched to: {', '.join(valid)}"}
                 ],
+                "taxpayer": taxpayer,
+                "_context": ctx_update,
             }
+            return out
 
         return node_dispatch
 

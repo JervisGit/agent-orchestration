@@ -626,6 +626,7 @@ async def process_email_stream(email_id: str):
             )
 
             # Drain token queue until graph finishes
+            streamed_nodes: set[str] = set()
             while not graph_task.done() or not token_queue.empty():
                 try:
                     item = token_queue.get_nowait()
@@ -638,32 +639,34 @@ async def process_email_stream(email_id: str):
                 if "token" in item:
                     yield f"data: {json.dumps({'type': 'token', 'node': item['node'], 'token': item['token']})}\n\n"
                 elif item.get("done"):
-                    # Node finished streaming — emit step event
+                    # Node finished streaming (or tool call completed) — emit step event
                     node_name = item["node"]
+                    streamed_nodes.add(node_name)
                     yield f"data: {json.dumps({'type': 'step', 'node': node_name, 'label': STEP_LABELS.get(node_name, node_name), 'detail': {}})}\n\n"
 
             # Await graph task and get node-level step events
             graph_steps = await graph_task
             for node_name, updates in graph_steps:
                 final_state.update(updates)
-                # Only emit step events for nodes that didn't stream tokens
-                if not any(u.get("node") == node_name for u in []):
-                    detail: dict = {}
-                    if node_name == "lookup_taxpayer":
-                        tp = updates.get("taxpayer")
-                        detail = {"taxpayer_found": tp is not None, "skipped": tp is None and not updates.get("_context")}
-                        if tp:
-                            detail.update({"taxpayer_name": tp.get("full_name"), "taxpayer_id": tp.get("tax_id")})
-                    elif node_name in ("classify", "intent_classify"):
-                        detail = {"category": updates.get("route") or ", ".join(updates.get("intents", []))}
-                    elif node_name == "supervisor":
-                        detail = {"next": updates.get("next_agent", "?")}
-                    elif node_name == "dispatch":
-                        detail = {"agents": updates.get("intents", [])}
-                    elif node_name == "merge":
-                        so = updates.get("specialist_outputs") or final_state.get("specialist_outputs", {})
-                        detail = {"merged_from": list(so.keys())}
-                    yield f"data: {json.dumps({'type': 'step', 'node': node_name, 'label': STEP_LABELS.get(node_name, node_name), 'detail': detail})}\n\n"
+                # Skip nodes that already got a step event via the token/tool queue
+                if node_name in streamed_nodes:
+                    continue
+                detail: dict = {}
+                if node_name == "lookup_taxpayer":
+                    tp = updates.get("taxpayer")
+                    detail = {"taxpayer_found": tp is not None, "skipped": tp is None and not updates.get("_context")}
+                    if tp:
+                        detail.update({"taxpayer_name": tp.get("full_name"), "taxpayer_id": tp.get("tax_id")})
+                elif node_name in ("classify", "intent_classify"):
+                    detail = {"category": updates.get("route") or ", ".join(updates.get("intents", []))}
+                elif node_name == "supervisor":
+                    detail = {"next": updates.get("next_agent", "?")}
+                elif node_name == "dispatch":
+                    detail = {"agents": updates.get("intents", [])}
+                elif node_name == "merge":
+                    so = updates.get("specialist_outputs") or final_state.get("specialist_outputs", {})
+                    detail = {"merged_from": list(so.keys())}
+                yield f"data: {json.dumps({'type': 'step', 'node': node_name, 'label': STEP_LABELS.get(node_name, node_name), 'detail': detail})}\n\n"
 
             # Post-execution policy check
             yield f"data: {json.dumps({'type': 'step', 'node': 'policy_check', 'label': STEP_LABELS['policy_check'], 'detail': {}})}\n\n"
@@ -677,6 +680,13 @@ async def process_email_stream(email_id: str):
                 pass
 
             tp = final_state.get("taxpayer")
+            logger.info(
+                "SSE final_state for email %s — taxpayer=%s intents=%s hitl=%s",
+                email_id,
+                tp.get("tax_id") if tp else None,
+                final_state.get("intents"),
+                final_state.get("hitl_required"),
+            )
             hitl = final_state.get("hitl_required", False)
             category = _active_category(final_state)
             email["status"] = "processed"
