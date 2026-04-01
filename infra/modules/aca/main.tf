@@ -18,6 +18,25 @@ variable "database_url" {
   sensitive = true
   default   = ""
 }
+variable "openai_api_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+variable "langfuse_public_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+variable "langfuse_secret_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+variable "langfuse_host" {
+  type    = string
+  default = "https://cloud.langfuse.com"
+}
 variable "tags" { type = map(string) }
 
 # ── Container Apps Environment ─────────────────────────────────────
@@ -63,6 +82,11 @@ resource "azurerm_container_app" "ao_api" {
     identity = var.ao_api_identity_id
   }
 
+  secret {
+    name  = "database-url"
+    value = var.database_url
+  }
+
   template {
     min_replicas = 0
     max_replicas = 3
@@ -76,6 +100,10 @@ resource "azurerm_container_app" "ao_api" {
       env {
         name  = "ENVIRONMENT"
         value = var.environment
+      }
+      env {
+        name        = "DATABASE_URL"
+        secret_name = "database-url"
       }
     }
   }
@@ -152,6 +180,23 @@ resource "azurerm_container_app" "email_assistant" {
     identity = var.ao_api_identity_id
   }
 
+  secret {
+    name  = "database-url"
+    value = var.database_url
+  }
+  secret {
+    name  = "openai-api-key"
+    value = var.openai_api_key
+  }
+  secret {
+    name  = "langfuse-public-key"
+    value = var.langfuse_public_key
+  }
+  secret {
+    name  = "langfuse-secret-key"
+    value = var.langfuse_secret_key
+  }
+
   template {
     min_replicas = 0
     max_replicas = 2
@@ -167,8 +212,28 @@ resource "azurerm_container_app" "email_assistant" {
         value = var.environment
       }
       env {
-        name  = "DATABASE_URL"
-        value = var.database_url
+        name        = "DATABASE_URL"
+        secret_name = "database-url"
+      }
+      env {
+        name        = "OPENAI_API_KEY"
+        secret_name = "openai-api-key"
+      }
+      env {
+        name        = "LANGFUSE_PUBLIC_KEY"
+        secret_name = "langfuse-public-key"
+      }
+      env {
+        name        = "LANGFUSE_SECRET_KEY"
+        secret_name = "langfuse-secret-key"
+      }
+      env {
+        name  = "LANGFUSE_HOST"
+        value = var.langfuse_host
+      }
+      env {
+        name  = "AO_PLATFORM_URL"
+        value = "https://${azurerm_container_app.ao_api.ingress[0].fqdn}"
       }
     }
   }

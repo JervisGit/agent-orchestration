@@ -92,6 +92,10 @@ module "aca" {
   ao_api_identity_principal_id    = module.security.ao_api_identity_principal_id
   ao_worker_identity_principal_id = module.security.ao_worker_identity_principal_id
   database_url                    = module.database.postgresql_connection_string
+  openai_api_key                  = var.openai_api_key
+  langfuse_public_key             = var.langfuse_public_key
+  langfuse_secret_key             = var.langfuse_secret_key
+  langfuse_host                   = var.langfuse_host
   tags                            = var.tags
 }
 

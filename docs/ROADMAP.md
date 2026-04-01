@@ -50,21 +50,18 @@
       to auto-trace; remove manual span/generation calls from executor nodes
 - [ ] **Policy evaluation Langfuse span** — policy check node runs silently post-execution
 
-## Phase 4 — Platform Management
+## Phase 4 — Platform Management ✅
 *Goal: operators manage agents, tools, and policies from the AO Platform, not by editing files.*
 
-The SDK already has the right structures; this phase wires them end-to-end:
-
-- [ ] **Tool registry API** — `POST /api/tools/`, `GET /api/tools/` backed by `ao_tools` DB table;
-      `ToolRegistry` in `ao-core` already handles registration but has no HTTP surface
-- [ ] **Tool access control** — `AgentConfig.tools: [tool_names]` is declared in manifest
-      but `ManifestExecutor` does not enforce it; add per-agent tool binding in executor
-- [ ] **Manifest API** — `POST /api/apps/{app_id}/manifest` to register/update an app's
-      `ao-manifest.yaml` via HTTP (store + validate in DB); currently only file-based
-- [ ] **Dashboard: Apps tab** — show registered apps, agents per app, tools per agent;
-      currently the "DSAI Apps" nav item exists but has no content
-- [ ] **App policies from API** — email assistant (and all future apps) reads active policies
-      from `GET /api/policies?app_id=` at startup instead of hardcoding them
+- [x] **Tool registry API** — `POST /api/tools/`, `GET /api/tools/` backed by `ao_tools` DB table
+- [x] **Manifest API** — `POST /api/apps/{app_id}/manifest` registers an app's manifest (mirror only;
+      see ADR-008 for canonical ownership decision)
+- [x] **Dashboard: Apps tab** — loads registered apps from `/api/apps/`; agent + tool drill-down;
+      Upload Manifest modal
+- [x] **App policies from API** — email assistant reads active policies from Platform at startup
+- [x] **Dashboard UI overhaul** — Microsoft blue theme (#0078d4), no emoji, all stat numbers white
+- [ ] **Tool access control** — `AgentConfig.tools` declared in manifest but `ManifestExecutor`
+      does not enforce per-agent tool binding at runtime
 
 ## Phase 5 — RAG Search Example
 *Goal: validate manifest + linear pattern; second reference app.*
@@ -97,8 +94,8 @@ The SDK already has the right structures; this phase wires them end-to-end:
 | Capability | Declared | SDK | API | Dashboard | Enforced at runtime |
 |---|---|---|---|---|---|
 | Agent declaration (YAML) | ✅ | ✅ | — | — | ✅ |
-| Tool declaration (YAML) | ✅ | ✅ | ❌ | ❌ | ❌ *not wired* |
-| Tool access per agent | ✅ | ✅ | ❌ | ❌ | ❌ *not enforced* |
-| Policy CRUD | ✅ | ✅ | ✅ | ✅ | ❌ *apps hardcode* |
+| Tool declaration (YAML) | ✅ | ✅ | ✅ | ✅ | ❌ *not wired* |
+| Tool access per agent | ✅ | ✅ | ✅ | ✅ | ❌ *not enforced* |
+| Policy CRUD | ✅ | ✅ | ✅ | ✅ | ✅ *loaded at startup* |
 | HITL approval flow | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Langfuse tracing | ✅ | ✅ | — | link | ✅ *manual spans* |

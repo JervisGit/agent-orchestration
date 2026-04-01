@@ -42,6 +42,33 @@ variable "postgres_admin_password" {
   sensitive = true
 }
 
+variable "openai_api_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+  description = "OpenAI API key stored in Key Vault and injected into container env vars"
+}
+
+variable "langfuse_public_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+  description = "Langfuse public key for tracing"
+}
+
+variable "langfuse_secret_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+  description = "Langfuse secret key for tracing"
+}
+
+variable "langfuse_host" {
+  type    = string
+  default = "https://cloud.langfuse.com"
+  description = "Langfuse server URL (cloud or self-hosted)"
+}
+
 variable "tags" {
   type = map(string)
   default = {
