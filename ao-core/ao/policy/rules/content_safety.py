@@ -69,38 +69,28 @@ def _check_regex(text: str, rule: PolicyRule) -> PolicyResult:
 
 
 # ── Azure AI Content Safety (Phase 2) ────────────────────────────
+# Hybrid approach:
+#   - Regex always runs first for jailbreak/injection (fast, no network).
+#     Prompt Shield requires azure-ai-contentsafety>=1.1 which is not yet
+#     available on the F0 tier; regex covers this gap.
+#   - Azure analyze_text runs second for H/V/S/SH category scoring.
 
 async def _check_azure(text: str, rule: PolicyRule, endpoint: str, key: str) -> PolicyResult:
-    """Call Azure AI Content Safety: Prompt Shield + category analysis."""
+    """Hybrid check: regex for jailbreak, Azure AI for content categories."""
     from azure.ai.contentsafety.aio import ContentSafetyClient
-    from azure.ai.contentsafety.models import (
-        AnalyzeTextOptions,
-        ShieldPromptOptions,
-        TextCategory,
-    )
+    from azure.ai.contentsafety.models import AnalyzeTextOptions, TextCategory
     from azure.core.credentials import AzureKeyCredential
     from azure.core.exceptions import HttpResponseError
 
-    severity_threshold: int = rule.params.get("severity_threshold", 4)
+    # 1. Regex check first — catches jailbreak/injection/toxicity instantly
+    regex_result = _check_regex(text, rule)
+    if not regex_result.passed:
+        return regex_result
 
+    # 2. Azure category analysis — Hate, Violence, Sexual, SelfHarm
+    severity_threshold: int = rule.params.get("severity_threshold", 4)
     try:
         async with ContentSafetyClient(endpoint, AzureKeyCredential(key)) as client:
-            # 1. Prompt Shield — jailbreak / indirect attack detection
-            try:
-                shield_result = await client.shield_prompt(
-                    ShieldPromptOptions(user_prompt=text, documents=[])
-                )
-                if shield_result.user_prompt_analysis and shield_result.user_prompt_analysis.attack_detected:
-                    return PolicyResult(
-                        rule_name=rule.name,
-                        passed=False,
-                        action=rule.action,
-                        detail="Content safety violation [jailbreak] (Prompt Shield): attack detected",
-                    )
-            except Exception as exc:
-                logger.warning("Prompt Shield call failed, continuing to category check: %s", exc)
-
-            # 2. Content category analysis
             analysis = await client.analyze_text(
                 AnalyzeTextOptions(
                     text=text,
@@ -123,13 +113,10 @@ async def _check_azure(text: str, rule: PolicyRule, endpoint: str, key: str) -> 
                             f"(Azure AI): severity {item.severity} >= threshold {severity_threshold}"
                         ),
                     )
-
     except HttpResponseError as exc:
-        logger.error("Azure Content Safety API error: %s — falling back to regex", exc)
-        return _check_regex(text, rule)
+        logger.error("Azure Content Safety API error: %s — regex result stands", exc)
     except Exception as exc:
-        logger.error("Unexpected error calling Azure Content Safety: %s — falling back to regex", exc)
-        return _check_regex(text, rule)
+        logger.error("Unexpected error calling Azure Content Safety: %s — regex result stands", exc)
 
     return PolicyResult(rule_name=rule.name, passed=True, action=rule.action)
 
@@ -139,8 +126,9 @@ async def _check_azure(text: str, rule: PolicyRule, endpoint: str, key: str) -> 
 async def check_content_safety(data: dict, rule: PolicyRule) -> PolicyResult:
     """Check input/output text for unsafe content.
 
-    Uses Azure AI Content Safety when env vars are configured,
-    otherwise falls back to regex patterns (local dev / free-trial).
+    Regex always runs for jailbreak/injection. When AZURE_CONTENT_SAFETY_ENDPOINT
+    and AZURE_CONTENT_SAFETY_KEY are set, Azure AI also scores H/V/S/SH categories.
+    Falls back gracefully on any Azure error — the regex result is never discarded.
     """
     text = data.get("input", "") or data.get("output", "")
     if not isinstance(text, str):
@@ -150,8 +138,8 @@ async def check_content_safety(data: dict, rule: PolicyRule) -> PolicyResult:
     key = os.environ.get("AZURE_CONTENT_SAFETY_KEY", "")
 
     if endpoint and key:
-        logger.debug("Content safety: using Azure AI Content Safety")
+        logger.debug("Content safety: regex + Azure AI Content Safety")
         return await _check_azure(text, rule, endpoint, key)
 
-    logger.debug("Content safety: AZURE_CONTENT_SAFETY_ENDPOINT not set — using regex fallback")
+    logger.debug("Content safety: regex only (AZURE_CONTENT_SAFETY_ENDPOINT not set)")
     return _check_regex(text, rule)
