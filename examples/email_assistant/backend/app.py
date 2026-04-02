@@ -215,6 +215,7 @@ async def _persist_email_state(email_id: str, email: dict) -> None:
             "hitl_required": email.get("hitl_required", False),
             "taxpayer_name": email.get("taxpayer_name"),
             "hitl_request_id": email.get("hitl_request_id"),
+            "completed_steps": email.get("completed_steps", []),
         })
     except Exception as exc:
         logger.warning("Could not persist email %s to Redis: %s", email_id, exc)
@@ -620,6 +621,7 @@ class EmailOut(BaseModel):
     taxpayer_name: str | None = None
     hitl_required: bool = False
     hitl_request_id: str | None = None
+    completed_steps: list[dict] = []
 
 class ProcessResult(BaseModel):
     email_id: str
@@ -723,6 +725,7 @@ async def list_emails() -> list[EmailOut]:
             taxpayer_name=e.get("taxpayer_name"),
             hitl_required=e.get("hitl_required", False),
             hitl_request_id=e.get("hitl_request_id"),
+            completed_steps=e.get("completed_steps", []),
         )
         for e in emails_db.values()
     ]
@@ -793,6 +796,8 @@ async def process_email_stream(email_id: str):
 
         try:
             final_state: dict = dict(initial_state)
+            # Accumulate step events so they can be persisted and restored after reload
+            completed_steps_log: list[dict] = []
 
             # Run graph stream in a background task so we can interleave token events
             graph_task = asyncio.create_task(
@@ -818,7 +823,9 @@ async def process_email_stream(email_id: str):
                     # Node finished streaming (or tool call completed) — emit step event
                     node_name = item["node"]
                     streamed_nodes.add(node_name)
-                    yield f"data: {json.dumps({'type': 'step', 'node': node_name, 'label': STEP_LABELS.get(node_name, node_name), 'detail': item.get('detail', {})})}\n\n"
+                    step_evt = {'type': 'step', 'node': node_name, 'label': STEP_LABELS.get(node_name, node_name), 'detail': item.get('detail', {})}
+                    completed_steps_log.append({'node': node_name, 'label': step_evt['label'], 'detail': step_evt['detail']})
+                    yield f"data: {json.dumps(step_evt)}\n\n"
 
             # Await graph task and get node-level step events
             graph_steps = await graph_task
@@ -846,7 +853,9 @@ async def process_email_stream(email_id: str):
                 elif node_name == "merge":
                     so = updates.get("specialist_outputs") or final_state.get("specialist_outputs", {})
                     detail = {"merged_from": list(so.keys())}
-                yield f"data: {json.dumps({'type': 'step', 'node': node_name, 'label': STEP_LABELS.get(node_name, node_name), 'detail': detail})}\n\n"
+                step_evt2 = {'type': 'step', 'node': node_name, 'label': STEP_LABELS.get(node_name, node_name), 'detail': detail}
+                completed_steps_log.append({'node': node_name, 'label': step_evt2['label'], 'detail': step_evt2['detail']})
+                yield f"data: {json.dumps(step_evt2)}\n\n"
 
             # Detect if the run was cancelled between node boundaries
             was_cancelled = active_executor.is_cancelled(trace_id)
@@ -878,6 +887,13 @@ async def process_email_stream(email_id: str):
                 email["status"] = "interrupted"
                 email["category"] = category or email.get("category")
                 email["policy_flags"] = flags
+                # Append synthetic stop step so history is visible after page reload
+                completed_steps_log.append({
+                    "node": "__stopped__",
+                    "label": "\u26d4 Stopped by user",
+                    "detail": {"at_step": len(completed_steps_log)},
+                })
+                email["completed_steps"] = completed_steps_log
                 await _persist_email_state(email_id, email)
                 logger.info("Stream cancelled for email %s after %d nodes", email_id, len(graph_steps))
                 yield f"data: {json.dumps({'type': 'cancelled', 'email_id': email_id, 'nodes_completed': len(graph_steps)})}\n\n"

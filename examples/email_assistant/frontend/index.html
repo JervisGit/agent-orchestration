@@ -557,6 +557,15 @@
 
     async function refreshEmails() {
       emails = await fetchJSON('/emails');
+      // Seed step history from server so it survives page reload
+      emails.forEach(e => {
+        if (e.completed_steps && e.completed_steps.length > 0) {
+          // Only overwrite if we don't have a live in-memory copy (i.e. not currently streaming)
+          if (!emailWorkflowSteps[e.id] || emailWorkflowSteps[e.id].length === 0) {
+            emailWorkflowSteps[e.id] = e.completed_steps;
+          }
+        }
+      });
       renderList();
       loadStats();
       if (selectedId) showDetail(selectedId);
@@ -634,6 +643,9 @@
             if (s.node === '__reasoning__') {
               return `<details class="reasoning-box"><summary>Agent reasoning</summary><pre class="reasoning-text">${esc(d.text || '')}</pre></details>`;
             }
+            if (s.node === '__stopped__') {
+              return `<div class="progress-step"><span class="step-icon" style="color:var(--orange)">&#x26D4;</span><div class="step-label" style="color:var(--orange)">${esc(s.label)}</div></div>`;
+            }
             if (s.node && s.node.startsWith('tool:')) {
               let toolDetail = '';
               if (d.found && d.taxpayer_name)
@@ -662,7 +674,7 @@
           }).join('');
           html += `
             <details class="workflow-summary">
-              <summary>Agent Workflow — ${wfSteps.length} steps</summary>
+              <summary>Agent Workflow — ${wfSteps.filter(s => s.node !== '__stopped__').length} steps${wfSteps.some(s => s.node === '__stopped__') ? ' (interrupted)' : ''}</summary>
               <div class="progress-panel">${stepRows}</div>
             </details>
           `;
@@ -687,12 +699,14 @@
           </div>
         `;
       } else if (e.status === 'interrupted') {
+        const doneSteps = (emailWorkflowSteps[id] || []).filter(s => s.node !== '__stopped__').length;
+        const stepHint = doneSteps > 0 ? `${doneSteps} step${doneSteps !== 1 ? 's' : ''} completed` : 'stopped at checkpoint';
         html += `
           <div class="process-btn-inline" style="display:flex;gap:8px;align-items:center;">
             <button class="btn-resume" onclick="processOne('${e.id}')">
-              Resume Processing
+              Resume from step ${doneSteps > 0 ? doneSteps : '…'}
             </button>
-            <span style="font-size:12px;color:var(--orange)">Stopped at a checkpoint — will continue from where it left off</span>
+            <span style="font-size:12px;color:var(--orange)">${stepHint} — will continue from where it left off</span>
           </div>
         `;
       }
@@ -835,12 +849,9 @@
         } else if (data.type === 'cancelled') {
           source.close();
           panel?.querySelector('.step-processing')?.remove();
-          if (panel) {
-            const el = document.createElement('div');
-            el.className = 'progress-step';
-            el.innerHTML = `<span class="step-icon" style="color:var(--orange)">&#x25AA;</span><div class="step-label" style="color:var(--orange)">Stopped — ${data.nodes_completed} node(s) completed. Click Resume to continue.</div>`;
-            panel.appendChild(el);
-          }
+          // Push the stop step into in-memory log (backend already persisted it)
+          emailWorkflowSteps[id] = emailWorkflowSteps[id] || [];
+          emailWorkflowSteps[id].push({ node: '__stopped__', label: '\u26d4 Stopped by user', detail: { at_step: data.nodes_completed } });
           const e = emails.find(x => x.id === id);
           if (e) { e.status = 'interrupted'; renderList(); showDetail(id); }
           showToast('Processing stopped at checkpoint', true);
