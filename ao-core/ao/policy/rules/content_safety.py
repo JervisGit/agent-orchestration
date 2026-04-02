@@ -85,6 +85,7 @@ async def _check_azure(text: str, rule: PolicyRule, endpoint: str, key: str) -> 
     # 1. Regex check first — catches jailbreak/injection/toxicity instantly
     regex_result = _check_regex(text, rule)
     if not regex_result.passed:
+        logger.info("Content safety BLOCKED by regex: %s", regex_result.detail)
         return regex_result
 
     # 2. Azure category analysis — Hate, Violence, Sexual, SelfHarm
@@ -104,15 +105,18 @@ async def _check_azure(text: str, rule: PolicyRule, endpoint: str, key: str) -> 
             )
             for item in analysis.categories_analysis or []:
                 if (item.severity or 0) >= severity_threshold:
+                    detail = (
+                        f"Content safety violation [{item.category}] "
+                        f"(Azure AI): severity {item.severity} >= threshold {severity_threshold}"
+                    )
+                    logger.info("Content safety BLOCKED by Azure AI: %s", detail)
                     return PolicyResult(
                         rule_name=rule.name,
                         passed=False,
                         action=rule.action,
-                        detail=(
-                            f"Content safety violation [{item.category}] "
-                            f"(Azure AI): severity {item.severity} >= threshold {severity_threshold}"
-                        ),
+                        detail=detail,
                     )
+            logger.info("Content safety PASSED: Azure AI categories all below threshold %d", severity_threshold)
     except HttpResponseError as exc:
         logger.error("Azure Content Safety API error: %s — regex result stands", exc)
     except Exception as exc:
@@ -138,8 +142,8 @@ async def check_content_safety(data: dict, rule: PolicyRule) -> PolicyResult:
     key = os.environ.get("AZURE_CONTENT_SAFETY_KEY", "")
 
     if endpoint and key:
-        logger.debug("Content safety: regex + Azure AI Content Safety")
+        logger.info("Content safety: using regex + Azure AI Content Safety (endpoint=%s)", endpoint)
         return await _check_azure(text, rule, endpoint, key)
 
-    logger.debug("Content safety: regex only (AZURE_CONTENT_SAFETY_ENDPOINT not set)")
+    logger.info("Content safety: using regex only (AZURE_CONTENT_SAFETY_ENDPOINT not set)")
     return _check_regex(text, rule)

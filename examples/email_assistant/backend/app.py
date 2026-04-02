@@ -844,16 +844,25 @@ async def process_email_stream(email_id: str):
         full_text = f"From: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"
 
         # ── Pre-execution safety gate ──────────────────────────────────────
-        # Run content_safety + pii_filter rules at pre_execution stage.
+        # Run eval first so we can include provider + result in the step detail.
         # content_safety is BLOCK — toxic/jailbreak inputs are rejected here
         # before any LLM call is made.  pii_filter is WARN — the TIN must
         # survive so lookup_taxpayer can query the database.
-        yield f"data: {json.dumps({'type': 'step', 'node': 'input_safety_check', 'label': STEP_LABELS['input_safety_check'], 'detail': {}})}\n\n"
         pre_eval = await policy_engine.evaluate(
             PolicyStage.PRE_EXECUTION,
             policies,
             {"input": full_text},
         )
+        # Build step detail — show which provider ran and whether it blocked
+        safety_result = next((r for r in pre_eval.results if r.rule_name == "content_safety"), None)
+        safety_detail: dict = {}
+        if safety_result:
+            provider = "azure+regex" if os.getenv("AZURE_CONTENT_SAFETY_ENDPOINT") else "regex"
+            safety_detail["provider"] = provider
+            safety_detail["blocked"] = not safety_result.passed
+            if not safety_result.passed:
+                safety_detail["reason"] = safety_result.detail
+        yield f"data: {json.dumps({'type': 'step', 'node': 'input_safety_check', 'label': STEP_LABELS['input_safety_check'], 'detail': safety_detail})}\n\n"
         pii_warnings = [r.detail for r in pre_eval.results if not r.passed and r.action.value == "warn"]
         if not pre_eval.allowed:
             blocked = next((r for r in pre_eval.results if not r.passed), None)

@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir \
     python-dotenv \
     python-json-logger \
     httpx \
+    aiohttp \
     langgraph-checkpoint-redis
 
 ENV PYTHONUNBUFFERED=1 \
