@@ -116,24 +116,12 @@ class ManifestExecutor:
         # trace_ids that were cancelled — kept until explicitly cleared so
         # is_cancelled() remains True even after the finally block cleans up the event
         self._cancelled_traces: set[str] = set()
-        # Checkpointer — saves node-level state after every node so a cancelled run
-        # can resume from the last completed node.
-        # Uses Redis (AsyncRedisSaver) when REDIS_URL is set so checkpoints survive
-        # container restarts.  Falls back to in-process MemorySaver for local dev.
-        import os as _os
-        _redis_url = _os.environ.get("REDIS_URL")
-        if _redis_url:
-            try:
-                from langgraph.checkpoint.redis.aio import AsyncRedisSaver
-                self._checkpointer = AsyncRedisSaver(redis_url=_redis_url)
-                logger.info("ManifestExecutor using Redis checkpointer (%s)", _redis_url.split("@")[-1])
-            except Exception as _exc:
-                logger.warning(
-                    "Redis checkpointer unavailable (%s) — falling back to MemorySaver", _exc
-                )
-                self._checkpointer = MemorySaver()
-        else:
-            self._checkpointer = MemorySaver()
+        # Checkpointer: MemorySaver saves node state after every node so a cancelled
+        # run can resume from the last completed node within the same process.
+        # AsyncRedisSaver (langgraph-checkpoint-redis) is intentionally NOT used here:
+        # Azure Cache for Redis Basic/Standard tier does not load the RedisJSON module
+        # required by AsyncRedisSaver, causing JSON.SET errors at runtime.
+        self._checkpointer = MemorySaver()
 
     # ── Registration ────────────────────────────────────────────────
 
@@ -457,11 +445,25 @@ class ManifestExecutor:
         self._open_trace(trace_id, state)
 
         # thread_id enables the checkpointer to save state per email and resume
-        # after interruption (Redis) or within the same process (MemorySaver).
+        # after interruption within the same process (MemorySaver).
         lg_config = {"configurable": {"thread_id": thread_id}}
 
+        # If a checkpoint already exists for this thread, pass None as input so
+        # LangGraph resumes from the last completed node rather than restarting.
+        _stream_input: dict | None = state
         try:
-            async for chunk in self._compiled.astream(state, config=lg_config, **kwargs):
+            _existing = await self._checkpointer.aget_tuple(lg_config)
+            if _existing is not None:
+                _stream_input = None
+                logger.info(
+                    "Resuming from checkpoint for thread %s (trace %s)",
+                    thread_id, trace_id,
+                )
+        except Exception:
+            pass  # No checkpoint or unsupported method — start fresh
+
+        try:
+            async for chunk in self._compiled.astream(_stream_input, config=lg_config, **kwargs):
                 yield chunk
                 # Check cancellation between node boundaries (after each node completes)
                 if cancel_event.is_set():
