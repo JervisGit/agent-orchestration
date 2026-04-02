@@ -1189,6 +1189,14 @@ class ManifestExecutor:
 
             logger.info("Supervisor decided: '%s' (trace %s)", decision, state.get("trace_id", "?"))
 
+            # Enforce no-repeat: if the LLM picks a specialist already called, force FINISH
+            if decision in specialist_outputs:
+                logger.warning(
+                    "Supervisor tried to re-route to already-called specialist '%s' — forcing FINISH (trace %s)",
+                    decision, state.get("trace_id", "?"),
+                )
+                decision = "finish"
+
             # Push supervisor decision to token queue so it appears in real-time in the UI
             # (rather than landing at the end via graph_steps after specialists finish)
             token_queue = executor._token_queues.get(state.get("trace_id", ""))

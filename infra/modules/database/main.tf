@@ -91,6 +91,6 @@ output "redis_hostname" {
 }
 
 output "redis_connection_string" {
-  value     = azurerm_redis_cache.ao.primary_connection_string
+  value     = "rediss://:${azurerm_redis_cache.ao.primary_access_key}@${azurerm_redis_cache.ao.hostname}:${azurerm_redis_cache.ao.ssl_port}"
   sensitive = true
 }
