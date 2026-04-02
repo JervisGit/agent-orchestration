@@ -51,6 +51,27 @@ variable "langfuse_init_secret_key" {
   type      = string
   sensitive = true
 }
+variable "langfuse_azure_ad_client_id" {
+  type    = string
+  default = ""
+}
+variable "langfuse_azure_ad_client_secret" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+variable "langfuse_azure_ad_tenant_id" {
+  type    = string
+  default = ""
+}
+variable "email_assistant_langfuse_public_key" {
+  type      = string
+  sensitive = true
+}
+variable "email_assistant_langfuse_secret_key" {
+  type      = string
+  sensitive = true
+}
 
 locals {
   langfuse_url = "https://ca-langfuse-${var.environment}.${azurerm_container_app_environment.ao.default_domain}"
@@ -226,11 +247,11 @@ resource "azurerm_container_app" "email_assistant" {
   }
   secret {
     name  = "langfuse-public-key"
-    value = var.langfuse_init_public_key
+    value = var.email_assistant_langfuse_public_key
   }
   secret {
     name  = "langfuse-secret-key"
-    value = var.langfuse_init_secret_key
+    value = var.email_assistant_langfuse_secret_key
   }
   secret {
     name  = "servicebus-connection-string"
@@ -347,6 +368,10 @@ resource "azurerm_container_app" "langfuse" {
     name  = "init-secret-key"
     value = var.langfuse_init_secret_key
   }
+  secret {
+    name  = "azure-ad-client-secret"
+    value = var.langfuse_azure_ad_client_secret
+  }
 
   template {
     min_replicas = 1
@@ -407,6 +432,28 @@ resource "azurerm_container_app" "langfuse" {
       env {
         name  = "LANGFUSE_INIT_USER_EMAIL"
         value = var.langfuse_admin_email
+      }
+      # Azure AD SSO — only active when client_id is non-empty
+      dynamic "env" {
+        for_each = var.langfuse_azure_ad_client_id != "" ? [1] : []
+        content {
+          name  = "AUTH_AZURE_AD_CLIENT_ID"
+          value = var.langfuse_azure_ad_client_id
+        }
+      }
+      dynamic "env" {
+        for_each = var.langfuse_azure_ad_client_id != "" ? [1] : []
+        content {
+          name        = "AUTH_AZURE_AD_CLIENT_SECRET"
+          secret_name = "azure-ad-client-secret"
+        }
+      }
+      dynamic "env" {
+        for_each = var.langfuse_azure_ad_tenant_id != "" ? [1] : []
+        content {
+          name  = "AUTH_AZURE_AD_TENANT_ID"
+          value = var.langfuse_azure_ad_tenant_id
+        }
       }
       env {
         name  = "LANGFUSE_INIT_USER_NAME"

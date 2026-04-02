@@ -55,6 +55,37 @@ variable "langfuse_admin_password" {
   description = "Langfuse admin user initial password (seeded on first boot)"
 }
 
+variable "langfuse_azure_ad_client_id" {
+  type        = string
+  description = "Azure AD app registration client ID for Langfuse SSO"
+  default     = ""
+}
+
+variable "langfuse_azure_ad_client_secret" {
+  type        = string
+  sensitive   = true
+  description = "Azure AD app registration client secret for Langfuse SSO"
+  default     = ""
+}
+
+variable "langfuse_azure_ad_tenant_id" {
+  type        = string
+  description = "Azure AD tenant ID for Langfuse SSO"
+  default     = ""
+}
+
+variable "email_assistant_langfuse_public_key" {
+  type        = string
+  sensitive   = true
+  description = "Langfuse public key for the email-assistant project"
+}
+
+variable "email_assistant_langfuse_secret_key" {
+  type        = string
+  sensitive   = true
+  description = "Langfuse secret key for the email-assistant project"
+}
+
 variable "tags" {
   type = map(string)
   default = {
