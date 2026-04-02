@@ -521,6 +521,9 @@
       Process All Emails
     </button>
     <button class="btn-secondary" onclick="refreshEmails()">Refresh</button>
+    <button class="btn-secondary" id="btn-reset-all" onclick="resetAll()" style="margin-left:auto;color:var(--red);border-color:var(--red)" title="Clear all email results and Redis state so every email can be re-processed">
+      Reset All
+    </button>
   </div>
 
   <div class="container">
@@ -902,6 +905,24 @@
           showToast(`Could not stop: ${err.message}`, true);
         }
       }
+    }
+
+    async function resetAll() {
+      if (!confirm('Reset all emails back to unprocessed?\nThis clears Redis state so every email can be re-run from scratch.')) return;
+      const btn = document.getElementById('btn-reset-all');
+      btn.disabled = true;
+      btn.textContent = 'Resetting...';
+      try {
+        const r = await fetchJSON('/emails/reset-all', { method: 'POST' });
+        // Clear client-side step history so stale steps don't flash before refresh
+        Object.keys(emailWorkflowSteps).forEach(k => delete emailWorkflowSteps[k]);
+        showToast(`Reset ${r.reset} emails — ready to re-process`);
+      } catch (err) {
+        showToast(`Reset failed: ${err.message}`, true);
+      }
+      btn.disabled = false;
+      btn.textContent = 'Reset All';
+      await refreshEmails();
     }
 
     async function processAll() {

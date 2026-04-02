@@ -1061,6 +1061,33 @@ async def process_all():
     return {"processed": len(results), "results": [r.model_dump() for r in results]}
 
 
+@app.post("/api/emails/reset-all")
+async def reset_all_emails():
+    """Reset every email back to its original 'new' state.
+
+    Clears all processing results from the in-memory db and from Redis so
+    the emails can be re-processed from scratch.  Active streams are not
+    interrupted — stop them first if needed.
+    """
+    KEEP_FIELDS = {"id", "subject", "body", "sender", "sender_name", "thread_id", "mode"}
+    for email_id, email in emails_db.items():
+        # Drop all derived fields, keep only the original seed data
+        for key in list(email.keys()):
+            if key not in KEEP_FIELDS:
+                del email[key]
+        email["status"] = "new"
+
+        # Remove persisted state from Redis
+        if _redis_memory:
+            try:
+                await _redis_memory.clear_session(email_id)
+            except Exception as exc:
+                logger.warning("Could not clear Redis state for %s: %s", email_id, exc)
+
+    logger.info("reset-all: cleared %d emails", len(emails_db))
+    return {"reset": len(emails_db)}
+
+
 # ── HITL execution endpoint ──────────────────────────────────────────
 # Called by the dashboard's Approve button (via payload.action_webhook).
 # Executes the approved action (update taxpayer notes) and marks the
