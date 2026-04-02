@@ -245,6 +245,19 @@ class ManifestExecutor:
                     "Tool %s called with invalid arguments: %s | args=%s",
                     tool_name, ve.message, args,
                 )
+                if token_queue := self._token_queues.get(state.get("trace_id", "")):
+                    try:
+                        token_queue.put_nowait({
+                            "node": f"tool:{tool_name}",
+                            "done": True,
+                            "detail": {
+                                "error": "invalid_arguments",
+                                "reason": ve.message,
+                                "args_received": args,
+                            },
+                        })
+                    except asyncio.QueueFull:
+                        pass
                 msg = {
                     "role": "tool",
                     "tool_call_id": call_id,

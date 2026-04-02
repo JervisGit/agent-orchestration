@@ -958,9 +958,9 @@ async def process_email_stream(email_id: str):
             # Detect if the run was cancelled between node boundaries
             was_cancelled = active_executor.is_cancelled(trace_id)
 
-            # Post-execution policy check
-            yield f"data: {json.dumps({'type': 'step', 'node': 'policy_check', 'label': STEP_LABELS['policy_check'], 'detail': {}})}\n\n"
+            # Post-execution policy check — run eval first so judge verdicts are in the detail
             flags: list[str] = list(final_state.get("policy_flags", []))
+            policy_check_detail: dict = {}
             try:
                 post_eval = await policy_engine.evaluate(
                     PolicyStage.POST_EXECUTION,
@@ -968,11 +968,21 @@ async def process_email_stream(email_id: str):
                     {"output": final_state.get("output", "")},
                 )
                 flags.extend([r.detail for r in post_eval.results if not r.passed])
+                # Surface per-dimension judge verdicts so the UI can display them
+                judge_result = next(
+                    (r for r in post_eval.results if r.rule_name == "llm_judge"), None
+                )
+                if judge_result:
+                    policy_check_detail["judge_flags"] = (
+                        [judge_result.detail] if not judge_result.passed else []
+                    )
+                policy_check_detail["flags"] = [r.detail for r in post_eval.results if not r.passed]
                 # Apply any redactions back to the output
                 if post_eval.modified_data and post_eval.modified_data.get("output"):
                     final_state["output"] = post_eval.modified_data["output"]
             except Exception:
                 logger.exception("Post-execution policy evaluation failed")
+            yield f"data: {json.dumps({'type': 'step', 'node': 'policy_check', 'label': STEP_LABELS['policy_check'], 'detail': policy_check_detail})}\n\n"
 
             tp = final_state.get("taxpayer")
             logger.info(
