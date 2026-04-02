@@ -886,7 +886,12 @@
         await fetchJSON(`/emails/${id}/cancel`, { method: 'POST' });
         showToast('Stop requested — waiting for current node to finish...');
       } catch (err) {
-        showToast(`Could not stop: ${err.message}`, true);
+        if (err.message.includes('404')) {
+          // Stream already finished before stop arrived — treat as no-op
+          showToast('Workflow already completed before stop arrived');
+        } else {
+          showToast(`Could not stop: ${err.message}`, true);
+        }
       }
     }
 

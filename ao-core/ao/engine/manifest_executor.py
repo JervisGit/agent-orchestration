@@ -115,7 +115,7 @@ class ManifestExecutor:
         self._cancel_events: dict[str, asyncio.Event] = {}
         # trace_ids that were cancelled — kept until explicitly cleared so
         # is_cancelled() remains True even after the finally block cleans up the event
-        self._cancelled_traces: set[str] = {}
+        self._cancelled_traces: set[str] = set()
         # Checkpointer — saves node-level state after every node so a cancelled run
         # can resume from the last completed node.
         # Uses Redis (AsyncRedisSaver) when REDIS_URL is set so checkpoints survive
