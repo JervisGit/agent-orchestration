@@ -72,6 +72,15 @@ variable "email_assistant_langfuse_secret_key" {
   type      = string
   sensitive = true
 }
+variable "content_safety_endpoint" {
+  type    = string
+  default = ""
+}
+variable "content_safety_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
 
 locals {
   langfuse_url = "https://ca-langfuse-${var.environment}.${azurerm_container_app_environment.ao.default_domain}"
@@ -261,6 +270,13 @@ resource "azurerm_container_app" "email_assistant" {
     name  = "redis-url"
     value = var.redis_url
   }
+  dynamic "secret" {
+    for_each = var.content_safety_key != "" ? [1] : []
+    content {
+      name  = "content-safety-key"
+      value = var.content_safety_key
+    }
+  }
 
   template {
     min_replicas = 0
@@ -303,6 +319,17 @@ resource "azurerm_container_app" "email_assistant" {
       env {
         name        = "REDIS_URL"
         secret_name = "redis-url"
+      }
+      env {
+        name  = "AZURE_CONTENT_SAFETY_ENDPOINT"
+        value = var.content_safety_endpoint
+      }
+      dynamic "env" {
+        for_each = var.content_safety_key != "" ? [1] : []
+        content {
+          name        = "AZURE_CONTENT_SAFETY_KEY"
+          secret_name = "content-safety-key"
+        }
       }
       env {
         name  = "AO_PLATFORM_URL"

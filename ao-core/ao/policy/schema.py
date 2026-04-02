@@ -27,6 +27,7 @@ BUILT_IN_RULES = frozenset({
     "token_budget",
     "rate_limit",
     "allowed_actions",
+    "llm_judge",   # handler must be injected via PolicyEngine.register_rule()
 })
 
 
@@ -82,6 +83,26 @@ class PolicySet:
             return cls.from_yaml(f.read())
 
     def get_rules(self, stage: PolicyStage) -> list[PolicyRule]:
+        return [p for p in self.policies if p.stage == stage]
+
+    @classmethod
+    def from_manifest_inline(cls, policies_inline: list[dict]) -> "PolicySet":
+        """Build a PolicySet directly from the parsed list in AppManifest.policies_inline."""
+        rules = []
+        for p in policies_inline or []:
+            if "name" not in p or "stage" not in p:
+                raise ValueError(f"Each policy must have 'name' and 'stage': {p}")
+            rules.append(
+                PolicyRule(
+                    name=p["name"],
+                    stage=PolicyStage(p["stage"]),
+                    action=PolicyAction(p.get("action", "block")),
+                    provider=p.get("provider"),
+                    params={k: v for k, v in p.items()
+                            if k not in ("name", "stage", "action", "provider")},
+                )
+            )
+        return cls(policies=rules)
         return [p for p in self.policies if p.stage == stage]
 
     def validate(self) -> list[str]:

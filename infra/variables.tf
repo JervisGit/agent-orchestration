@@ -86,6 +86,12 @@ variable "email_assistant_langfuse_secret_key" {
   description = "Langfuse secret key for the email-assistant project"
 }
 
+variable "enable_content_safety" {
+  type        = bool
+  default     = true
+  description = "Provision Azure AI Content Safety (F0 free tier, eastus). Set false to skip entirely."
+}
+
 variable "tags" {
   type = map(string)
   default = {

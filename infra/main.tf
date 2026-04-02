@@ -83,6 +83,7 @@ module "ai" {
   resource_group_name = data.azurerm_resource_group.main.name
   location            = var.location
   openai_location     = "eastus"
+  enable_content_safety = var.enable_content_safety
   tags                = var.tags
 }
 
@@ -118,6 +119,8 @@ module "aca" {
   langfuse_admin_password         = var.langfuse_admin_password
   langfuse_init_public_key        = "pk-lf-${random_uuid.langfuse_public_key.result}"
   langfuse_init_secret_key        = "sk-lf-${random_uuid.langfuse_secret_key.result}"
+  content_safety_endpoint         = module.ai.content_safety_endpoint
+  content_safety_key              = module.ai.content_safety_key
   langfuse_azure_ad_client_id          = var.langfuse_azure_ad_client_id
   langfuse_azure_ad_client_secret      = var.langfuse_azure_ad_client_secret
   langfuse_azure_ad_tenant_id          = var.langfuse_azure_ad_tenant_id

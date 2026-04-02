@@ -38,7 +38,21 @@ class ToolRegistry:
         required_identity: IdentityMode | None = None,
         parameters: dict[str, Any] | None = None,
     ) -> None:
-        """Register a tool."""
+        """Register a tool, validating the schema via ToolSchema before storing."""
+        from pydantic import ValidationError
+
+        from ao.tools.schema import ToolSchema
+
+        schema_dict = {
+            "name": name,
+            "description": description,
+            "parameters": parameters or {"type": "object", "properties": {}},
+        }
+        try:
+            ToolSchema.model_validate(schema_dict)
+        except ValidationError as exc:
+            raise ValueError(f"Invalid tool schema for '{name}': {exc}") from exc
+
         self._tools[name] = ToolSpec(
             name=name,
             description=description,

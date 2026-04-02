@@ -157,17 +157,37 @@ tools:
     description: PostgreSQL lookup of taxpayer records by TIN or email. Used by the lookup_taxpayer pre-step node in app.py.
     connection_secret: database-url
 
+  - name: lookup_taxpayer
+    type: database
+    description: Look up a taxpayer record by Tax Identification Number (TIN).
+    parameters:
+      tin:
+        type: string
+        description: "The taxpayer's TIN in the format SG-TXXX-XXXX, e.g. SG-T001-2890"
+        pattern: "^[Ss][Gg]-[Tt]\\d{3}-\\d{4}$"
+
 # -- Policies ----------------------------------------------------------
 policies:
+  - name: content_safety
+    stage: pre_execution
+    action: block
+  - name: pii_filter
+    stage: pre_execution
+    action: warn
   - name: pii_filter
     stage: post_execution
     action: redact
   - name: content_safety
     stage: post_execution
     action: warn
-  - name: tax_accuracy
+  - name: llm_judge
     stage: post_execution
     action: warn
+    checks:
+      - advice_overreach
+      - factuality
+      - completeness
+      - tone
 
 # -- Pattern notes -----------------------------------------------------
 # The 'concurrent' pattern = Microsoft's 'Concurrent orchestration'.

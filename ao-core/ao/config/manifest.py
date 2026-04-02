@@ -107,9 +107,14 @@ class AppManifest:
         agents = [
             AgentConfig(**a) for a in data.get("agents", [])
         ]
-        tools = [
-            ToolConfig(**t) for t in data.get("tools", [])
-        ]
+        tools = []
+        for t in data.get("tools", []):
+            # Manifest uses 'parameters' for tool arg schemas; store under params
+            # so app code can read t.params["parameters"]["tin"]["pattern"] etc.
+            t_data = dict(t)
+            if "parameters" in t_data and "params" not in t_data:
+                t_data["params"] = {"parameters": t_data.pop("parameters")}
+            tools.append(ToolConfig(**t_data))
 
         return cls(
             app_id=data["app_id"],

@@ -226,11 +226,37 @@ class ManifestExecutor:
             msg = {"role": "tool", "tool_call_id": call_id, "content": f"Unknown tool: {tool_name}"}
             return msg, {}
 
-        fn, _schema = self._tools[tool_name]
+        fn, schema = self._tools[tool_name]
         try:
             args = _json.loads(arguments_json) if arguments_json else {}
         except Exception:
             args = {}
+
+        # Validate arguments against the declared JSON Schema before calling the tool.
+        # Bad args are returned as a structured error message so the LLM can self-correct
+        # on the next tool-calling loop iteration rather than crashing or silently failing.
+        param_schema = schema.parameters.model_dump() if schema.parameters else {}
+        if param_schema:
+            try:
+                import jsonschema
+                jsonschema.validate(instance=args, schema=param_schema)
+            except jsonschema.ValidationError as ve:
+                logger.warning(
+                    "Tool %s called with invalid arguments: %s | args=%s",
+                    tool_name, ve.message, args,
+                )
+                msg = {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": (
+                        f"Invalid arguments for tool '{tool_name}': {ve.message}. "
+                        f"Expected schema: {_json.dumps(param_schema)}. "
+                        "Please correct the arguments and try again."
+                    ),
+                }
+                return msg, {}
+            except ImportError:
+                logger.warning("jsonschema not installed — skipping tool argument validation")
 
         lf_span = None
         if lf_trace:

@@ -55,3 +55,36 @@ output "openai_endpoint" {
 output "openai_id" {
   value = azurerm_cognitive_account.openai.id
 }
+
+# ── Azure AI Content Safety (optional) ───────────────────────────
+#
+# Requires subscription-level quota for 'ContentSafety' kind.
+# Set enable_content_safety = false to skip on free-trial subscriptions.
+# When disabled, AZURE_CONTENT_SAFETY_ENDPOINT will be empty and
+# the Phase 1 regex guardrail in content_safety.py remains active.
+
+variable "enable_content_safety" {
+  type        = bool
+  default     = true
+  description = "Set false to skip Content Safety provisioning entirely"
+}
+
+resource "azurerm_cognitive_account" "content_safety" {
+  count               = var.enable_content_safety ? 1 : 0
+  name                = "cs-ao-${var.environment}"
+  location            = "eastus"
+  resource_group_name = var.resource_group_name
+  kind                = "ContentSafety"
+  sku_name            = "F0"
+
+  tags = var.tags
+}
+
+output "content_safety_endpoint" {
+  value = var.enable_content_safety ? azurerm_cognitive_account.content_safety[0].endpoint : ""
+}
+
+output "content_safety_key" {
+  value     = var.enable_content_safety ? azurerm_cognitive_account.content_safety[0].primary_access_key : ""
+  sensitive = true
+}
