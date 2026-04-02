@@ -29,13 +29,14 @@ resource "azurerm_application_insights" "ao" {
 
 # ── Langfuse ───────────────────────────────────────────────────────
 #
-# Langfuse strategy depends on compute_platform (set in root module):
+# Langfuse v2 is self-hosted as a Container App in the same ACA environment
+# as the rest of the platform (ACA mode). Data never leaves the Azure tenant.
 #
-# ACA mode  → Langfuse Cloud (free tier, https://cloud.langfuse.com)
-#             No infra to manage. Set LANGFUSE_HOST, PUBLIC_KEY, SECRET_KEY
-#             as env vars on the Container Apps.
+# The Langfuse container app is defined in modules/aca/main.tf.
+# It connects to the dedicated `langfuse` database on the shared PostgreSQL
+# Flexible Server and is seeded on first boot via LANGFUSE_INIT_* env vars.
 #
-# AKS mode  → Self-hosted via Helm chart on AKS namespace.
+# AKS mode → Self-hosted via Helm chart on AKS namespace.
 #             DATABASE_URL → PostgreSQL from database module
 #             NEXTAUTH_URL → Langfuse ingress URL
 #             NEXTAUTH_SECRET → Key Vault secret

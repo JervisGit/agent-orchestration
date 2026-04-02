@@ -23,19 +23,37 @@ variable "openai_api_key" {
   sensitive = true
   default   = ""
 }
-variable "langfuse_public_key" {
+variable "langfuse_database_url" {
   type      = string
   sensitive = true
-  default   = ""
 }
-variable "langfuse_secret_key" {
+variable "langfuse_nextauth_secret" {
   type      = string
   sensitive = true
-  default   = ""
 }
-variable "langfuse_host" {
+variable "langfuse_salt" {
+  type      = string
+  sensitive = true
+}
+variable "langfuse_admin_email" {
   type    = string
-  default = "https://cloud.langfuse.com"
+  default = "theofficialjjarvis@gmail.com"
+}
+variable "langfuse_admin_password" {
+  type      = string
+  sensitive = true
+}
+variable "langfuse_init_public_key" {
+  type      = string
+  sensitive = true
+}
+variable "langfuse_init_secret_key" {
+  type      = string
+  sensitive = true
+}
+
+locals {
+  langfuse_url = "https://ca-langfuse-${var.environment}.${azurerm_container_app_environment.ao.default_domain}"
 }
 variable "servicebus_connection_string" {
   type      = string
@@ -208,11 +226,11 @@ resource "azurerm_container_app" "email_assistant" {
   }
   secret {
     name  = "langfuse-public-key"
-    value = var.langfuse_public_key
+    value = var.langfuse_init_public_key
   }
   secret {
     name  = "langfuse-secret-key"
-    value = var.langfuse_secret_key
+    value = var.langfuse_init_secret_key
   }
   secret {
     name  = "servicebus-connection-string"
@@ -255,7 +273,7 @@ resource "azurerm_container_app" "email_assistant" {
       }
       env {
         name  = "LANGFUSE_HOST"
-        value = var.langfuse_host
+        value = local.langfuse_url
       }
       env {
         name        = "SERVICEBUS_CONNECTION_STRING"
@@ -292,6 +310,131 @@ resource "azurerm_container_app" "email_assistant" {
 
 # ── Outputs ────────────────────────────────────────────────────────
 
+# ── Langfuse (Self-Hosted) Container App ─────────────────────────
+#
+# Langfuse v2 is deployed directly into the ACA environment so that
+# all LLM trace data stays within the Azure tenant.
+# min_replicas = 1: Next.js SSR + NextAuth session store cannot
+# tolerate scale-to-zero cold starts (breaks auth + drops first trace).
+
+resource "azurerm_container_app" "langfuse" {
+  name                         = "ca-langfuse-${var.environment}"
+  container_app_environment_id = azurerm_container_app_environment.ao.id
+  resource_group_name          = var.resource_group_name
+  revision_mode                = "Single"
+
+  secret {
+    name  = "database-url"
+    value = var.langfuse_database_url
+  }
+  secret {
+    name  = "nextauth-secret"
+    value = var.langfuse_nextauth_secret
+  }
+  secret {
+    name  = "salt"
+    value = var.langfuse_salt
+  }
+  secret {
+    name  = "admin-password"
+    value = var.langfuse_admin_password
+  }
+  secret {
+    name  = "init-public-key"
+    value = var.langfuse_init_public_key
+  }
+  secret {
+    name  = "init-secret-key"
+    value = var.langfuse_init_secret_key
+  }
+
+  template {
+    min_replicas = 1
+    max_replicas = 1
+
+    container {
+      name   = "langfuse"
+      image  = "langfuse/langfuse:2"
+      cpu    = 0.5
+      memory = "1Gi"
+
+      env {
+        name        = "DATABASE_URL"
+        secret_name = "database-url"
+      }
+      env {
+        name        = "NEXTAUTH_SECRET"
+        secret_name = "nextauth-secret"
+      }
+      env {
+        name  = "NEXTAUTH_URL"
+        value = local.langfuse_url
+      }
+      env {
+        name        = "SALT"
+        secret_name = "salt"
+      }
+      env {
+        name  = "TELEMETRY_ENABLED"
+        value = "false"
+      }
+      # Seed initial org / project / admin user on first boot.
+      # Idempotent: skipped if the IDs already exist in the database.
+      env {
+        name  = "LANGFUSE_INIT_ORG_ID"
+        value = "org-ao-${var.environment}"
+      }
+      env {
+        name  = "LANGFUSE_INIT_ORG_NAME"
+        value = "AO Platform"
+      }
+      env {
+        name  = "LANGFUSE_INIT_PROJECT_ID"
+        value = "proj-ao-${var.environment}"
+      }
+      env {
+        name  = "LANGFUSE_INIT_PROJECT_NAME"
+        value = "agent-orchestration"
+      }
+      env {
+        name        = "LANGFUSE_INIT_PROJECT_PUBLIC_KEY"
+        secret_name = "init-public-key"
+      }
+      env {
+        name        = "LANGFUSE_INIT_PROJECT_SECRET_KEY"
+        secret_name = "init-secret-key"
+      }
+      env {
+        name  = "LANGFUSE_INIT_USER_EMAIL"
+        value = var.langfuse_admin_email
+      }
+      env {
+        name  = "LANGFUSE_INIT_USER_NAME"
+        value = "AO Admin"
+      }
+      env {
+        name        = "LANGFUSE_INIT_USER_PASSWORD"
+        secret_name = "admin-password"
+      }
+    }
+  }
+
+  ingress {
+    external_enabled = true
+    target_port      = 3000
+    transport        = "http"
+
+    traffic_weight {
+      percentage      = 100
+      latest_revision = true
+    }
+  }
+
+  tags = var.tags
+}
+
+# ── Outputs ────────────────────────────────────────────────────────
+
 output "api_fqdn" {
   value = azurerm_container_app.ao_api.ingress[0].fqdn
 }
@@ -306,4 +449,8 @@ output "email_assistant_url" {
 
 output "environment_id" {
   value = azurerm_container_app_environment.ao.id
+}
+
+output "langfuse_url" {
+  value = "https://${azurerm_container_app.langfuse.ingress[0].fqdn}"
 }

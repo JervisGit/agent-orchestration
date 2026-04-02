@@ -38,6 +38,13 @@ resource "azurerm_postgresql_flexible_server_database" "ao" {
   charset   = "UTF8"
 }
 
+resource "azurerm_postgresql_flexible_server_database" "langfuse" {
+  name      = "langfuse"
+  server_id = azurerm_postgresql_flexible_server.ao.id
+  collation = "en_US.utf8"
+  charset   = "UTF8"
+}
+
 # Enable pgvector extension
 resource "azurerm_postgresql_flexible_server_configuration" "extensions" {
   name      = "azure.extensions"
@@ -83,6 +90,11 @@ output "postgresql_fqdn" {
 
 output "postgresql_connection_string" {
   value     = "postgresql://aoadmin:${var.admin_password}@${azurerm_postgresql_flexible_server.ao.fqdn}:5432/ao?sslmode=require"
+  sensitive = true
+}
+
+output "langfuse_connection_string" {
+  value     = "postgresql://aoadmin:${var.admin_password}@${azurerm_postgresql_flexible_server.ao.fqdn}:5432/langfuse?sslmode=require"
   sensitive = true
 }
 

@@ -49,24 +49,10 @@ variable "openai_api_key" {
   description = "OpenAI API key stored in Key Vault and injected into container env vars"
 }
 
-variable "langfuse_public_key" {
+variable "langfuse_admin_password" {
   type      = string
   sensitive = true
-  default   = ""
-  description = "Langfuse public key for tracing"
-}
-
-variable "langfuse_secret_key" {
-  type      = string
-  sensitive = true
-  default   = ""
-  description = "Langfuse secret key for tracing"
-}
-
-variable "langfuse_host" {
-  type    = string
-  default = "https://cloud.langfuse.com"
-  description = "Langfuse server URL (cloud or self-hosted)"
+  description = "Langfuse admin user initial password (seeded on first boot)"
 }
 
 variable "tags" {

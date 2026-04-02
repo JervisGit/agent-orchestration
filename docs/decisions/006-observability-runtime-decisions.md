@@ -13,7 +13,7 @@ those choices, the constraints that drove them, and the implications for product
 ## Decision 1: Langfuse Server v2, Python SDK pinned to `<3.0`
 
 ### What was decided
-- Docker image pinned to `langfuse/langfuse:2` (not `:latest`)
+- Docker image pinned to `langfuse/langfuse:2` (not `:latest`) — deployed as an ACA container app, not cloud.langfuse.com
 - Python SDK pinned to `langfuse>=2.0,<3.0` in `pyproject.toml`
 
 ### Why
