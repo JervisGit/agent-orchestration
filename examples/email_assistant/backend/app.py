@@ -1065,26 +1065,21 @@ async def process_all():
 async def reset_all_emails():
     """Reset every email back to its original 'new' state.
 
-    Clears all processing results from the in-memory db and from Redis so
-    the emails can be re-processed from scratch.  Active streams are not
+    Rebuilds each entry from SAMPLE_EMAILS so no original field is lost,
+    then clears persisted state from Redis.  Active streams are not
     interrupted — stop them first if needed.
     """
-    KEEP_FIELDS = {"id", "subject", "body", "sender", "sender_name", "thread_id", "mode"}
-    for email_id, email in emails_db.items():
-        # Drop all derived fields, keep only the original seed data
-        for key in list(email.keys()):
-            if key not in KEEP_FIELDS:
-                del email[key]
-        email["status"] = "new"
+    seed_by_id = {e["id"]: dict(e) for e in SAMPLE_EMAILS}
+    for email_id in list(emails_db.keys()):
+        emails_db[email_id] = seed_by_id[email_id]
 
-        # Remove persisted state from Redis
         if _redis_memory:
             try:
                 await _redis_memory.clear_session(email_id)
             except Exception as exc:
                 logger.warning("Could not clear Redis state for %s: %s", email_id, exc)
 
-    logger.info("reset-all: cleared %d emails", len(emails_db))
+    logger.info("reset-all: reset %d emails to seed state", len(emails_db))
     return {"reset": len(emails_db)}
 
 
