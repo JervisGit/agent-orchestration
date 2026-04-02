@@ -20,7 +20,7 @@
 - `AppManifest`: `pattern`, `classifier_agent`, `intent_agents` fields
 - `ManifestExecutor`: reads `ao-manifest.yaml`, builds LangGraph automatically
   - `router` pattern: classify → one specialist → END
-  - `concurrent` pattern (was `magentic`): detect all intents → parallel dispatch
+  - `concurrent` pattern: detect all intents → parallel dispatch
     → LLM merge → END; merge node has Langfuse generation span
 - Pattern library: `router`, `linear`, `supervisor`, `planner`, `concurrent`
 - Email assistant: `app.py` uses `ManifestExecutor`; `ao-manifest.yaml` declares

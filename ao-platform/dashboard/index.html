@@ -559,7 +559,7 @@
       empty.classList.add('hidden');
       const patternBadge = p => ({
         linear: 'badge-blue', router: 'badge-blue', supervisor: 'badge-blue', planner: 'badge-blue',
-        concurrent: 'badge-blue', magentic: 'badge-blue', handoff: 'badge-blue',
+        concurrent: 'badge-blue', handoff: 'badge-blue',
       })[p] || 'badge-neutral';
       tbody.innerHTML = wfs.map(w => `<tr>
         <td style="font-weight:600">${esc(w.workflow_id)}</td>

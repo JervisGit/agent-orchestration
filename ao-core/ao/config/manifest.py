@@ -69,11 +69,11 @@ class AppManifest:
     display_name: str
     description: str = ""
 
-    # Workflow pattern: "router" | "linear" | "supervisor" | "planner" | "magentic"
+    # Workflow pattern: "router" | "linear" | "supervisor" | "planner" | "concurrent"
     pattern: str = "router"
-    # Name of the agent that classifies/routes (used by ManifestExecutor for router/magentic)
+    # Name of the agent that classifies/routes (used by ManifestExecutor for router/concurrent)
     classifier_agent: str = "classifier"
-    # Agents eligible for multi-intent dispatch (magentic pattern only).
+    # Agents eligible for multi-intent dispatch (concurrent pattern only).
     # If empty, all non-classifier agents are candidates.
     intent_agents: list[str] = field(default_factory=list)
 

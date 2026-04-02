@@ -10,6 +10,7 @@ Agent Memory & State            -> we don't want to rebuild this for every singl
 Agentic AI Patterns and HITL    /
 (maybe other things too except for the three above)
 Have a single central hub handle/manage all of this. Hypothetically, In the event a change is needed, e.g., langgraph framework is found to have CVEs and vulnerabilities and we need to change to a new framework, we don't need to change the code in all DSAI apps code repos but rather just one AO repo!
+Philosophy: Agentic AI landscape is fast-changing, we must design in such a way that makes it not difficult for us to change/switch moving parts of the solution.
 
 Card2
 A bit hard for me to visualise what we need to log, without having a system to log and objects to log, so I build AO and clone of SWEE in my azure subscription to test.
@@ -19,6 +20,7 @@ Build a working model, work backwards to look at all the decisions (ADR) made an
 										langgraph
 											  final working model
 									   *msft agent framework
+
 The decisions/ADR may not be the most correct one or the one we should eventually take, rather just taken the moment based on what makes sense to get the model working, and then we look back to see what decisions could be made for the blueprint study.
 
 Card3
@@ -32,13 +34,21 @@ Basically condense most of what we know into this one slide, make it concise and
 Annexes
 Can suggest what to talk about here, should be comprehensively cover everything we have implemented, but not too long-winded for each annex. I can provide screenshots as needed, can also show diagrams, I will refine them as necessary if you provide a diagram for the slide. Should talk about the ADR/decisions that can be made for every annex slide/section.
 Can probably talk about the MCP server ADR
-Agents to agents communication (Service Bus?)
+Can talk about
+Agents and nodes state and agents to agents communication/handoff (Redis?)
 Input and Output validation from Agents, between agents convo and for tool usage?
 How to add agents and tools for each application? should be config-driven and scalable, cannot hardcode
 Can maybe talk about the SWEE/Tax email assistant pattern ADR, like a. an intent classifier -> concurrent
 specialist agents invocation or b. Magentic/Supervisor -> calls sub-agents and decides next steps or when to stop.
+Can talk about rule policy to apply. Can be regex based and rudimentary. Filters out preliminary risks.
+Can talk about graceful degradation
+Can talk about how to let different apps team developers access only their apps traces in Langfuse, different project?
+Can talk about using LLM as a judge/critic to review critical actions
 etc...
 
 Put langfuse in its own container app
-Use redis and service bus
-HITL probably need to be in a queue right, because it is async and not sure when the officer will come and review
+guardrails
+Make GPT CoT?
+how to make sure our agents don't spam the tools calling? In the event a request failed or is stale?
+AgentOps
+Redteaming and deepeval

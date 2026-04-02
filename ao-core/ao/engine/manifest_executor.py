@@ -298,13 +298,13 @@ class ManifestExecutor:
         """
         if self._manifest.pattern == "router":
             return self._compile_router(state_schema)
-        if self._manifest.pattern in ("concurrent", "magentic"):
+        if self._manifest.pattern == "concurrent":
             return self._compile_concurrent(state_schema)
         if self._manifest.pattern == "supervisor":
             return self._compile_supervisor(state_schema)
         raise NotImplementedError(
             f"Pattern '{self._manifest.pattern}' not yet supported by ManifestExecutor. "
-            "Supported: 'router', 'concurrent', 'supervisor'. 'magentic' is an alias for 'concurrent'. "
+            "Supported: 'router', 'concurrent', 'supervisor'. "
             "For 'linear', 'planner', register your graph via LangGraphEngine."
         )
 
@@ -363,7 +363,6 @@ class ManifestExecutor:
     def _compile_concurrent(self, state_schema: type) -> Any:
         """Build the concurrent pattern: [pre-steps] → intent_classify → dispatch → merge → END.
 
-        Also accessible as pattern='magentic' (alias kept for backwards compatibility).
         Corresponds to Microsoft's 'Concurrent orchestration' pattern.
         """
         agents = {a.name: a for a in self._manifest.agents}
@@ -532,7 +531,7 @@ class ManifestExecutor:
         lf_trace = self._active_traces.pop(trace_id, None)
         if lf_trace:
             try:
-                # router uses 'route'; magentic uses 'intents' — include whichever is present
+                # router uses 'route'; concurrent uses 'intents' — include whichever is present
                 category = final_state.get("route") or final_state.get("intents")
                 lf_trace.update(
                     output=final_state.get("output", ""),
@@ -787,7 +786,7 @@ class ManifestExecutor:
         return node_specialist
 
     def _make_intent_classifier_node(self, cfg: AgentConfig, categories: list[str]) -> Callable:
-        """Return an async node that detects ALL matching intents (magentic pattern).
+        """Return an async node that detects ALL matching intents (concurrent pattern).
 
         The system prompt should instruct the LLM to return a comma-separated list.
         Falls back to [categories[-1]] when no valid intent is detected.
@@ -890,7 +889,7 @@ class ManifestExecutor:
                         metadata={
                             "category": cfg.name,
                             "sop_applied": bool(cfg.sop),
-                            "pattern": "magentic",
+                            "pattern": "concurrent",
                             **cfg.trace_metadata,
                         },
                     )
@@ -1091,7 +1090,7 @@ class ManifestExecutor:
 
         The supervisor agent reads the request, decides which specialist to invoke
         (by name), receives its output, then decides the next specialist or "FINISH".
-        Corresponds to Microsoft's 'Orchestrator' / 'Magentic-One orchestrator' pattern.
+        Corresponds to Microsoft's 'Group chat / Magentic-One orchestrator' pattern.
 
         Manifest convention: the agent whose name is 'supervisor', or the first agent
         if none has that name, is used as the orchestrator.  All other agents are

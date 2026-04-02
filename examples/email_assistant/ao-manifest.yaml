@@ -169,9 +169,9 @@ policies:
     stage: post_execution
     action: warn
 
-# -- Magentic example --------------------------------------------------
-# The 'concurrent' pattern above IS the Microsoft 'Concurrent orchestration' pattern.
-# 'magentic' is accepted as an alias for 'concurrent' in ManifestExecutor.
+# -- Pattern notes -----------------------------------------------------
+# The 'concurrent' pattern = Microsoft's 'Concurrent orchestration'.
+# Detects ALL intents, dispatches specialists in parallel, merges results.
 #
 # True Magentic-One (Microsoft) = an orchestrator LLM that dynamically plans which
 # specialists to call, reviews each result, and re-plans. That maps closer to the

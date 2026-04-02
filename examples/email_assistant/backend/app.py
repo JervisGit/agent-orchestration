@@ -553,7 +553,7 @@ SAMPLE_EMAILS = [
         ),
         # Two distinct intents: filing_extension + payment_arrangement.
         # With the 'router' pattern the classifier picks ONE intent and the second
-        # is left unanswered — this demonstrates why the 'magentic' pattern exists.
+        # is left unanswered — this demonstrates why the 'concurrent' pattern exists.
         "status": "new", "category": None, "draft_reply": None, "policy_flags": [],
     },
     {

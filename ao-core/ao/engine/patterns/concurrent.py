@@ -1,4 +1,4 @@
-"""Magentic orchestration pattern — multi-intent parallel specialist dispatch.
+"""Concurrent orchestration pattern — multi-intent parallel specialist dispatch.
 
 An intent-classifier node detects ALL applicable intents from the input.
 A dispatcher node runs each matched specialist concurrently via asyncio.gather.
@@ -10,9 +10,11 @@ Use when a single user message may span multiple domains that require
 independent expert handling (e.g. "I need a filing extension AND a payment
 plan" requires two specialists running in parallel, not one routing branch).
 
-Contrast with 'router': router calls ONE specialist. Magentic calls N ≥ 1
+Contrast with 'router': router calls ONE specialist. Concurrent calls N ≥ 1
 specialists concurrently and merges results. With a single intent detected,
-magentic degenerates to single-specialist execution with no merge overhead.
+concurrent degenerates to single-specialist execution with no merge overhead.
+
+Corresponds to Microsoft's 'Concurrent orchestration' pattern.
 """
 
 from typing import Any, Callable, TypedDict
@@ -20,8 +22,8 @@ from typing import Any, Callable, TypedDict
 from langgraph.graph import END, StateGraph
 
 
-class MagenticState(TypedDict):
-    """Default state for a magentic workflow."""
+class ConcurrentState(TypedDict):
+    """Default state for a concurrent workflow."""
 
     input: str
     intents: list[str]          # intent names detected by the classifier
@@ -30,13 +32,13 @@ class MagenticState(TypedDict):
     output: str                 # final merged reply
 
 
-def build_magentic(
+def build_concurrent(
     intent_classifier_fn: Callable[..., Any],
     dispatch_fn: Callable[..., Any],
     merge_fn: Callable[..., Any],
-    state_schema: type = MagenticState,
+    state_schema: type = ConcurrentState,
 ) -> StateGraph:
-    """Build a LangGraph for magentic multi-intent orchestration.
+    """Build a LangGraph for concurrent multi-intent orchestration.
 
     Args:
         intent_classifier_fn: Callable that reads state["input"] and returns
