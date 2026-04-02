@@ -884,6 +884,7 @@ async def process_email_stream(email_id: str):
 
             # ── Cancelled path ─────────────────────────────────────
             if was_cancelled:
+                active_executor.clear_cancelled(trace_id)
                 email["status"] = "interrupted"
                 email["category"] = category or email.get("category")
                 email["policy_flags"] = flags

@@ -113,6 +113,9 @@ class ManifestExecutor:
         self._token_queues: dict[str, asyncio.Queue] = {}
         # trace_id -> asyncio.Event; set to request cancellation mid-stream
         self._cancel_events: dict[str, asyncio.Event] = {}
+        # trace_ids that were cancelled — kept until explicitly cleared so
+        # is_cancelled() remains True even after the finally block cleans up the event
+        self._cancelled_traces: set[str] = {}
         # Checkpointer — saves node-level state after every node so a cancelled run
         # can resume from the last completed node.
         # Uses Redis (AsyncRedisSaver) when REDIS_URL is set so checkpoints survive
@@ -187,8 +190,14 @@ class ManifestExecutor:
 
     def is_cancelled(self, trace_id: str) -> bool:
         """Return True if cancellation has been requested for trace_id."""
+        if trace_id in self._cancelled_traces:
+            return True
         event = self._cancel_events.get(trace_id)
         return event is not None and event.is_set()
+
+    def clear_cancelled(self, trace_id: str) -> None:
+        """Remove trace_id from the cancelled set after the caller has handled it."""
+        self._cancelled_traces.discard(trace_id)
 
     # ── Tool helpers ─────────────────────────────────────────────────
 
@@ -460,6 +469,7 @@ class ManifestExecutor:
                         "Stream cancelled at node boundary for trace %s (thread %s)",
                         trace_id, thread_id,
                     )
+                    self._cancelled_traces.add(trace_id)
                     break
         finally:
             self._close_trace(trace_id, state)
