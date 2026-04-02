@@ -731,13 +731,7 @@ async def lifespan(app: FastAPI):
             logger.warning("Redis unavailable — email state will not persist across restarts: %s", exc)
             _redis_memory = None
 
-    # Try to load policies from the AO Platform API; fall back to hardcoded defaults
-    platform_policies = await _load_policies_from_platform(APP_ID)
-    if platform_policies:
-        policies = platform_policies
-        logger.info("Loaded %d policies from AO Platform", len(policies.policies))
-    else:
-        logger.info("Using fallback hardcoded policies (%d)", len(policies.policies))
+    logger.info("Using manifest policies (%d)", len(policies.policies))
 
     print(
         f"Tax Email Assistant ready — LLM: {type(llm).__name__}, "

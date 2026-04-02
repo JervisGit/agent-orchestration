@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS ao_policies (
     action      VARCHAR(50),
     params      JSONB        DEFAULT '{}',
     created_at  TIMESTAMPTZ  DEFAULT NOW(),
-    UNIQUE(app_id, name)
+    UNIQUE(app_id, name, stage)
 );
 
 -- ── AO Platform: HITL approval queue ──────────────────────────
@@ -127,6 +127,8 @@ ON CONFLICT DO NOTHING;
 
 -- ── Seed: default policies ────────────────────────────────────
 INSERT INTO ao_policies (app_id, name, stage, action) VALUES
+('tax_email_assistant','content_safety','pre_execution', 'block'),
+('tax_email_assistant','pii_filter',    'pre_execution', 'warn'),
 ('tax_email_assistant','pii_filter',    'post_execution','redact'),
 ('tax_email_assistant','content_safety','post_execution','warn'),
 ('tax_email_assistant','tax_accuracy',  'post_execution','warn'),
