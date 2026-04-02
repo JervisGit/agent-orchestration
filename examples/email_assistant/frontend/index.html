@@ -887,8 +887,17 @@
         showToast('Stop requested — waiting for current node to finish...');
       } catch (err) {
         if (err.message.includes('404')) {
-          // Stream already finished before stop arrived — treat as no-op
-          showToast('Workflow already completed before stop arrived');
+          // No active stream — workflow may have finished, or the email is stuck
+          // in 'processing' from a client disconnect. Try to reset it first.
+          try {
+            await fetchJSON(`/emails/${id}/reset`, { method: 'POST' });
+            showToast('Email was stuck — reset so you can retry');
+            await refreshEmails();
+          } catch (resetErr) {
+            // 409 = email is in a different state (processed / new) — just refresh
+            showToast('Workflow already completed before stop arrived');
+            await refreshEmails();
+          }
         } else {
           showToast(`Could not stop: ${err.message}`, true);
         }

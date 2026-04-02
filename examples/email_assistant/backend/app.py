@@ -733,6 +733,23 @@ async def cancel_email_stream(email_id: str):
     return {"cancelled": True, "email_id": email_id, "trace_id": trace_id}
 
 
+@app.post("/api/emails/{email_id}/reset")
+async def reset_email(email_id: str):
+    """Reset a stuck 'processing' email back to 'interrupted' so it can be retried.
+
+    Use when a client disconnected mid-stream and the email is frozen in 'processing'.
+    """
+    email = emails_db.get(email_id)
+    if not email:
+        raise HTTPException(status_code=404, detail="Email not found")
+    if email["status"] != "processing":
+        raise HTTPException(status_code=409, detail=f"Email is '{email['status']}', not 'processing'")
+    email["status"] = "interrupted"
+    await _persist_email_state(email_id, email)
+    logger.info("Reset stuck email %s from 'processing' to 'interrupted'", email_id)
+    return {"reset": True, "email_id": email_id}
+
+
 @app.get("/api/emails/{email_id}/process/stream")
 async def process_email_stream(email_id: str):
     """SSE endpoint: streams step-by-step progress as the graph runs.
@@ -940,6 +957,12 @@ async def process_email_stream(email_id: str):
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
         finally:
             _active_streams.pop(email_id, None)
+            # Client may have disconnected mid-stream (GeneratorExit bypasses except).
+            # If status never advanced past 'processing', mark as interrupted so the
+            # user can retry rather than seeing a frozen "Initializing..." panel.
+            if email.get("status") == "processing":
+                email["status"] = "interrupted"
+                await _persist_email_state(email_id, email)
 
     return StreamingResponse(
         generate(),
