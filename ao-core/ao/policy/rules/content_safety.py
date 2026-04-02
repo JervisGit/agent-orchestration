@@ -155,26 +155,3 @@ async def check_content_safety(data: dict, rule: PolicyRule) -> PolicyResult:
 
     logger.debug("Content safety: AZURE_CONTENT_SAFETY_ENDPOINT not set — using regex fallback")
     return _check_regex(text, rule)
-
-
-def check_content_safety(data: dict, rule: PolicyRule) -> PolicyResult:
-    """Check input/output text for jailbreak, toxicity, and bias bait patterns.
-
-    Returns a failed PolicyResult on the first match found, including the
-    category and matched pattern for Langfuse trace annotation.
-    """
-    text = data.get("input", "") or data.get("output", "")
-    if not isinstance(text, str):
-        text = str(text)
-
-    for category, patterns in _PATTERN_GROUPS:
-        for pattern in patterns:
-            if pattern.search(text):
-                return PolicyResult(
-                    rule_name=rule.name,
-                    passed=False,
-                    action=rule.action,
-                    detail=f"Content safety violation [{category}]: matched pattern '{pattern.pattern[:60]}'",
-                )
-
-    return PolicyResult(rule_name=rule.name, passed=True, action=rule.action)
