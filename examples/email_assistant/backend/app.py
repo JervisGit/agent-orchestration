@@ -668,6 +668,22 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Using fallback hardcoded policies (%d)", len(policies.policies))
 
+    # ── Redis checkpointer: initialise async context on each executor ──
+    _cp_executors: list = []
+    if _REDIS_URL:
+        try:
+            from langgraph.checkpoint.redis.aio import AsyncRedisSaver as _AsyncRedisSaver
+            from langgraph.checkpoint.memory import MemorySaver as _MemSaver
+            for _exec in (executor, executor_sv):
+                if isinstance(_exec._checkpointer, _AsyncRedisSaver):
+                    await _exec._checkpointer.__aenter__()
+                    _cp_executors.append(_exec)
+            logger.info("Redis checkpointer ready (%d executor(s))", len(_cp_executors))
+        except Exception as _exc:
+            logger.warning("Redis checkpointer setup failed (%s) — falling back to MemorySaver", _exc)
+            for _exec in (executor, executor_sv):
+                _exec._checkpointer = _MemSaver()
+
     print(
         f"Tax Email Assistant ready — LLM: {type(llm).__name__}, "
         f"DB: {'connected' if db_ok else 'OFFLINE — taxpayer lookup disabled'}, "
@@ -676,6 +692,12 @@ async def lifespan(app: FastAPI):
     )
     yield
 
+    # ── Shutdown cleanup ─────────────────────────────────────────────
+    for _exec in _cp_executors:
+        try:
+            await _exec._checkpointer.__aexit__(None, None, None)
+        except Exception as _exc:
+            logger.warning("Redis checkpointer close failed: %s", _exc)
     if _redis_memory:
         await _redis_memory.close()
 

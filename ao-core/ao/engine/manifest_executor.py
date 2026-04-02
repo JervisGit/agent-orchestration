@@ -122,7 +122,7 @@ class ManifestExecutor:
         if _redis_url:
             try:
                 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
-                self._checkpointer = AsyncRedisSaver.from_conn_string(_redis_url)
+                self._checkpointer = AsyncRedisSaver(redis_url=_redis_url)
                 logger.info("ManifestExecutor using Redis checkpointer (%s)", _redis_url.split("@")[-1])
             except Exception as _exc:
                 logger.warning(
