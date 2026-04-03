@@ -213,6 +213,71 @@ class ManifestExecutor:
         ]
         return tools or None
 
+    async def _judge_tool_call(
+        self,
+        tool_name: str,
+        args: dict,
+        result_content: str,
+        input_text: str,
+        lf_trace: Any | None,
+    ) -> dict:
+        """LLM-as-judge: was this tool call appropriate and correct given the input?
+
+        Returns a dict with keys: verdict ("appropriate"|"unnecessary"|"incorrect"),
+        reason (short string).  Always succeeds — any LLM/parse failure returns
+        verdict="unknown" so it never blocks the primary flow.
+        """
+        prompt = (
+            f"You are reviewing an AI agent's tool usage decision.\n\n"
+            f"Tool called: {tool_name}\n"
+            f"Arguments provided: {_json.dumps(args)}\n"
+            f"Tool returned (first 200 chars): {result_content[:200]}\n\n"
+            f"Original input (first 500 chars):\n{input_text[:500]}\n\n"
+            "Was this tool call appropriate and necessary given the input? "
+            "Were the arguments correct?\n\n"
+            'Respond ONLY with valid JSON: {"verdict": "appropriate|unnecessary|incorrect", '
+            '"reason": "<max 15 words, empty string if appropriate>"}'
+        )
+        verdict = "unknown"
+        reason = ""
+        try:
+            resp = await self._llm.complete(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+            )
+            raw = (resp.content or "").strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            data = _json.loads(raw.strip())
+            verdict = data.get("verdict", "appropriate")
+            reason = data.get("reason", "")
+        except Exception as exc:
+            logger.debug("Tool call judge failed (non-blocking): %s", exc)
+            verdict = "unknown"
+            reason = "judge call failed"
+
+        if lf_trace:
+            try:
+                lf_trace.span(
+                    name=f"judge:tool-{tool_name}",
+                    input={"tool": tool_name, "args": args},
+                    output={"verdict": verdict, "reason": reason},
+                    level="WARNING" if verdict not in ("appropriate", "unknown") else "DEFAULT",
+                )
+            except Exception:
+                pass
+
+        if verdict not in ("appropriate", "unknown"):
+            logger.warning(
+                "Tool call judge verdict '%s' for tool '%s': %s", verdict, tool_name, reason
+            )
+        else:
+            logger.debug("Tool call judge: %s — %s", tool_name, verdict)
+
+        return {"verdict": verdict, "reason": reason}
+
     async def _execute_tool_call(
         self,
         call_id: str,
@@ -304,7 +369,17 @@ class ManifestExecutor:
             except Exception:
                 pass
 
-        # Notify queue that tool call completed — include args + result summary for UI detail
+        # LLM-as-judge: was this tool call appropriate and were the args correct?
+        # Runs after execution so it can see both the args and the result.
+        tool_judge = await self._judge_tool_call(
+            tool_name=tool_name,
+            args=args,
+            result_content=content_str,
+            input_text=state.get("input", ""),
+            lf_trace=lf_trace,
+        )
+
+        # Notify queue that tool call completed — include args + result summary + judge verdict
         if token_queue:
             try:
                 token_queue.put_nowait({
@@ -315,6 +390,7 @@ class ManifestExecutor:
                         "found": bool(state_update.get("taxpayer")),
                         "taxpayer_name": (state_update.get("taxpayer") or {}).get("full_name"),
                         "taxpayer_id": (state_update.get("taxpayer") or {}).get("tax_id"),
+                        "judge": tool_judge,
                     },
                 })
             except asyncio.QueueFull:

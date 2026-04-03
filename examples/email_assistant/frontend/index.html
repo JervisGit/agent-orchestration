@@ -655,7 +655,16 @@
                 toolDetail = ` → ${esc(d.taxpayer_id)} · ${esc(d.taxpayer_name)}`;
               else if (d.args && (d.args.tin || d.args.email))
                 toolDetail = ` → ${esc(d.args.tin || d.args.email)} · No record found`;
-              return `<div class="step-tool"><span>&#x1F527;</span> ${esc(s.label)}<span class="step-detail" style="display:inline">${toolDetail}</span></div>`;
+              // Judge verdict sub-row
+              let judgeRow = '';
+              if (d.judge && d.judge.verdict) {
+                const jv = d.judge.verdict;
+                const jIcon = jv === 'appropriate' ? '✓' : (jv === 'unknown' ? '?' : '⚠');
+                const jCol  = jv === 'appropriate' ? 'var(--green)' : (jv === 'unknown' ? 'var(--text2)' : 'var(--yellow)');
+                const jReason = d.judge.reason ? ` — ${esc(d.judge.reason)}` : '';
+                judgeRow = `<div style="font-size:10px;color:${jCol};padding-left:20px;margin-top:1px">${jIcon} Tool judge: ${esc(jv)}${jReason}</div>`;
+              }
+              return `<div class="step-tool"><span>&#x1F527;</span> ${esc(s.label)}<span class="step-detail" style="display:inline">${toolDetail}</span>${judgeRow}</div>`;
             }
             if (d.taxpayer_found === true && d.taxpayer_name)
               det = `<div class="step-detail">→ ${esc(d.taxpayer_name)} · ${esc(d.taxpayer_id || '')}</div>`;
