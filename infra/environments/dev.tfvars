@@ -10,4 +10,5 @@ postgres_admin_password = "Test12345678"
 enable_apim          = true
 apim_publisher_email = "your-team@example.com" # TODO: replace with actual team email
 apim_publisher_name  = "AO Platform Team"
+enable_test_sp       = true  # Creates a test SP with App Roles for local APIM testing; set false before production
 # apim_sku_name     = "Consumption_0"            # Default; change to "Developer_1" for VNet/portal features

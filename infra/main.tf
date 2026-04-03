@@ -166,7 +166,13 @@ module "apim" {
   publisher_name               = var.apim_publisher_name
   sku_name                     = var.apim_sku_name
   ao_api_identity_principal_id = module.security.ao_api_identity_principal_id
-  tags                         = var.tags
+  enable_test_sp               = var.enable_test_sp
+  backend_urls = {
+    # Points APIM at the email assistant's /taxpayer/{tin} endpoint.
+    # Uses try() so this works even when compute_platform = "aks" (no ACA module).
+    taxpayer_api = try(module.aca[0].email_assistant_url, "")
+  }
+  tags = var.tags
 }
 
 # ── Outputs ────────────────────────────────────────────────────────
@@ -221,4 +227,15 @@ output "apim_gateway_url" {
 output "apim_app_identifier_uri" {
   value       = try(module.apim[0].apim_app_identifier_uri, null)
   description = "Token scope for agents: {uri}/.default — null when enable_apim = false"
+}
+
+output "test_caller_client_id" {
+  value       = try(module.apim[0].test_caller_client_id, null)
+  description = "Test SP client ID for local APIM testing — null when enable_test_sp = false"
+}
+
+output "test_caller_client_secret" {
+  value       = try(module.apim[0].test_caller_client_secret, null)
+  sensitive   = true
+  description = "Test SP client secret — null when enable_test_sp = false"
 }

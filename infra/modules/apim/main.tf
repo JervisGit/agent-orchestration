@@ -180,6 +180,17 @@ resource "azurerm_api_management_named_value" "apim_audience" {
   secret              = false
 }
 
+# v2 tokens carry the GUID client_id as aud; v1 tokens carry the identifier URI.
+# Accept both so that managed-identity callers (ACA/AKS) and test/OBO callers all work.
+resource "azurerm_api_management_named_value" "apim_client_id" {
+  name                = "apim-client-id"
+  resource_group_name = var.resource_group_name
+  api_management_name = azurerm_api_management.ao.name
+  display_name        = "apim-client-id"
+  value               = azuread_application.apim_resource.client_id
+  secret              = false
+}
+
 # ── AO Agents API ──────────────────────────────────────────────────
 # All DSAI tool operations live under path /agents.
 # API-level policy: validate JWT audience (applies to every operation).
@@ -207,13 +218,17 @@ resource "azurerm_api_management_api_policy" "ao_agents" {
   xml_content = <<-XML
     <policies>
       <inbound>
-        <!-- Step 1 (all operations): verify the token is issued for this APIM instance -->
+        <!-- Step 1 (all operations): verify the token is issued for this APIM instance.
+             Accept both audience forms:
+               - identifier URI (v1 tokens / OBO)
+               - client_id GUID (v2 client-credentials / managed identity tokens) -->
         <validate-jwt header-name="Authorization"
                       failed-validation-httpcode="401"
                       failed-validation-error-message="Access denied: valid bearer token required.">
           <openid-config url="https://login.microsoftonline.com/{{tenant-id}}/v2.0/.well-known/openid-configuration" />
           <audiences>
             <audience>{{apim-audience}}</audience>
+            <audience>{{apim-client-id}}</audience>
           </audiences>
         </validate-jwt>
         <base />
@@ -263,6 +278,7 @@ resource "azurerm_api_management_api_operation_policy" "taxpayer_lookup" {
           <openid-config url="https://login.microsoftonline.com/{{tenant-id}}/v2.0/.well-known/openid-configuration" />
           <audiences>
             <audience>{{apim-audience}}</audience>
+            <audience>{{apim-client-id}}</audience>
           </audiences>
           <required-claims>
             <claim name="roles" match="any">
@@ -286,8 +302,65 @@ resource "azurerm_api_management_backend" "taxpayer_api" {
   resource_group_name = var.resource_group_name
   api_management_name = azurerm_api_management.ao.name
   protocol            = "http"
-  url                 = "https://placeholder.internal"
-  description         = "Taxpayer database API — set url to the DSAI app's internal API endpoint once deployed"
+  url                 = var.backend_urls["taxpayer_api"] != "" ? var.backend_urls["taxpayer_api"] : "https://placeholder.internal"
+  description         = "Taxpayer database API — points to the email-assistant /taxpayer endpoint (behind APIM)"
+}
+
+# ── Test service principal (local dev only) ───────────────────────
+# Used to acquire client-credentials tokens with App Roles for APIM testing
+# without needing a managed identity. Not deployed to production environments.
+# To remove: set enable_test_sp = false in the environment tfvars.
+
+variable "enable_test_sp" {
+  type        = bool
+  default     = false
+  description = "Create a test service principal with App Roles for local APIM testing. Set false in production."
+}
+
+# Backend URLs per tool — keyed by the backend resource name.
+# Each entry is passed from main.tf, which reads the ACA / AKS module outputs.
+# Set to "" to keep the placeholder (APIM returns 500 until wired to a real URL).
+variable "backend_urls" {
+  type = map(string)
+  default = {
+    taxpayer_api = ""
+  }
+  description = "Map of backend resource name to URL. taxpayer_api: base URL for the taxpayer lookup endpoint."
+}
+
+resource "azuread_application" "test_caller" {
+  count        = var.enable_test_sp ? 1 : 0
+  display_name = "apim-ao-${var.environment}-test-caller"
+}
+
+resource "azuread_service_principal" "test_caller" {
+  count     = var.enable_test_sp ? 1 : 0
+  client_id = azuread_application.test_caller[0].client_id
+}
+
+resource "azuread_application_password" "test_caller" {
+  count          = var.enable_test_sp ? 1 : 0
+  application_id = azuread_application.test_caller[0].id
+  display_name   = "local-test"
+  end_date       = "2027-01-01T00:00:00Z"
+}
+
+resource "azuread_app_role_assignment" "test_caller" {
+  for_each = var.enable_test_sp ? var.agent_app_roles : {}
+
+  app_role_id         = random_uuid.app_role_id[each.key].result
+  principal_object_id = azuread_service_principal.test_caller[0].object_id
+  resource_object_id  = azuread_service_principal.apim_resource.object_id
+}
+
+output "test_caller_client_id" {
+  value     = var.enable_test_sp ? azuread_application.test_caller[0].client_id : null
+  sensitive = false
+}
+
+output "test_caller_client_secret" {
+  value     = var.enable_test_sp ? azuread_application_password.test_caller[0].value : null
+  sensitive = true
 }
 
 # ── Outputs ────────────────────────────────────────────────────────

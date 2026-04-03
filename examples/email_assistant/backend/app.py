@@ -36,6 +36,8 @@ from pydantic import BaseModel
 
 from ao.config.manifest import AppManifest
 from ao.engine.manifest_executor import ManifestExecutor
+from ao.identity.context import IdentityContext, IdentityMode
+from ao.identity.entra import EntraCredentialProvider
 from ao.llm.base import LLMProvider
 from ao.memory.short_term import ShortTermMemory
 from ao.policy.engine import PolicyEngine
@@ -51,6 +53,8 @@ FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 MANIFEST_PATH = Path(__file__).parent.parent / "ao-manifest.yaml"
 DATABASE_URL    = os.getenv("DATABASE_URL",    "postgresql://ao:localdev@localhost:5432/ao")
 PLATFORM_URL    = os.getenv("AO_PLATFORM_URL", "http://localhost:8000")
+APIM_GATEWAY_URL = os.getenv("APIM_GATEWAY_URL", "")  # e.g. https://apim-ao-dev.azure-api.net
+APIM_SCOPE       = os.getenv("APIM_SCOPE", "")        # e.g. api://{tenant_id}/apim-ao-dev/.default
 APP_ID          = "tax_email_assistant"
 
 # Service Bus — dead-letter failed stream runs (no-op locally when not set)
@@ -120,6 +124,14 @@ def _create_langfuse_client() -> Any | None:
     return None
 
 langfuse_client = _create_langfuse_client()
+
+# ── Credential provider (used by APIM-backed tools) ────────────────
+# client_id / client_secret are only needed for OBO (user-delegated) flow.
+# For service identity (this app's UAMI), DefaultAzureCredential is used.
+_credential_provider = EntraCredentialProvider(
+    client_id=os.getenv("AO_CLIENT_ID"),
+    client_secret=os.getenv("AO_CLIENT_SECRET"),
+)
 
 # ── ManifestExecutor ────────────────────────────────────────────────
 # Reads ao-manifest.yaml and builds the LangGraph automatically.
@@ -358,9 +370,34 @@ async def node_lookup_taxpayer(state: TaxEmailState) -> dict:
     }
 
 
-async def _tool_lookup_taxpayer(tin: str) -> dict:
-    """Tool callable: look up a taxpayer by TIN, return both LLM-facing text and state update."""
-    taxpayer = await _db_lookup_taxpayer("", tin)
+async def _tool_lookup_taxpayer(tin: str, identity: IdentityContext | None = None) -> dict:
+    """Tool callable: look up a taxpayer by TIN.
+
+    When APIM_GATEWAY_URL is set the request goes via APIM (production path):
+      - acquires a Bearer token for the app's managed identity
+      - calls GET {APIM_GATEWAY_URL}/agents/taxpayer/{tin}
+      - APIM validates the JWT + Agents.TaxpayerLookup role, then forwards
+        to this app's own /taxpayer/{tin} endpoint (or a dedicated DSAI API)
+
+    When APIM_GATEWAY_URL is not set it falls back to the direct psycopg
+    query (local dev with no Azure infrastructure).
+    """
+    if APIM_GATEWAY_URL and identity is not None:
+        try:
+            token = await _credential_provider.get_token(identity, APIM_SCOPE)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{APIM_GATEWAY_URL}/agents/taxpayer/{tin}",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                resp.raise_for_status()
+                taxpayer = resp.json()
+        except Exception as exc:
+            logger.warning("APIM taxpayer lookup failed, falling back to direct DB: %s", exc)
+            taxpayer = await _db_lookup_taxpayer("", tin)
+    else:
+        taxpayer = await _db_lookup_taxpayer("", tin)
+
     return {
         "content": _format_taxpayer_context(taxpayer),
         "state": {
@@ -762,6 +799,26 @@ app.add_middleware(
 )
 
 # ── Endpoints ────────────────────────────────────────────────────────
+
+@app.get("/taxpayer/{tin}")
+async def get_taxpayer(tin: str):
+    """Internal taxpayer lookup endpoint — called by APIM after JWT + role validation.
+
+    APIM sits in front of this endpoint and enforces:
+      - Valid Bearer token (JWT audience check)
+      - Agents.TaxpayerLookup App Role claim
+
+    This endpoint itself does not re-validate the token: by the time the
+    request arrives here, APIM has already verified it.  Do not expose this
+    endpoint directly to the internet without APIM in front.
+    """
+    validated_tin = tin.upper()
+    if not re.fullmatch(r'SG-T\d{3}-\d{4}', validated_tin):
+        raise HTTPException(status_code=400, detail="Invalid TIN format. Expected SG-TXXX-XXXX.")
+    taxpayer = await _db_lookup_taxpayer("", validated_tin)
+    if taxpayer is None:
+        raise HTTPException(status_code=404, detail=f"Taxpayer {validated_tin} not found")
+    return taxpayer
 
 @app.get("/api/emails")
 async def list_emails() -> list[EmailOut]:

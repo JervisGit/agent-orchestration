@@ -125,3 +125,9 @@ variable "apim_sku_name" {
   default     = "Consumption_0"
   description = "'{tier}_{capacity}' — e.g. 'Consumption_0' (instant, pay-per-call) or 'Developer_1' (full-featured, ~45 min deploy). Consumption capacity is always 0."
 }
+
+variable "enable_test_sp" {
+  type        = bool
+  default     = false
+  description = "Create a test service principal with App Roles for local APIM testing. Set false in production."
+}
