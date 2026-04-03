@@ -105,6 +105,11 @@ variable "apim_scope" {
   default     = ""
   description = "Token scope for agent tool calls, e.g. api://apim-ao-dev/.default — injected as APIM_SCOPE when non-empty"
 }
+variable "apim_taxpayer_url" {
+  type        = string
+  default     = ""
+  description = "Full APIM URL for taxpayer lookup, e.g. {gateway}/agents/taxpayer — injected as APIM_TAXPAYER_URL when non-empty"
+}
 variable "tags" { type = map(string) }
 
 # ── Container Apps Environment ─────────────────────────────────────
@@ -357,6 +362,13 @@ resource "azurerm_container_app" "email_assistant" {
         content {
           name  = "APIM_SCOPE"
           value = var.apim_scope
+        }
+      }
+      dynamic "env" {
+        for_each = var.apim_taxpayer_url != "" ? [1] : []
+        content {
+          name  = "APIM_TAXPAYER_URL"
+          value = var.apim_taxpayer_url
         }
       }
     }

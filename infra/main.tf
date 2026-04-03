@@ -138,6 +138,7 @@ module "aca" {
   redis_url                       = module.database.redis_connection_string
   apim_gateway_url                = try(module.apim[0].apim_gateway_url, "")
   apim_scope                      = try(module.apim[0].apim_app_identifier_uri, "") != "" ? "${try(module.apim[0].apim_app_identifier_uri, "")}/.default" : ""
+  apim_taxpayer_url               = try(module.apim[0].apim_gateway_url, "") != "" ? "${try(module.apim[0].apim_gateway_url, "")}/agents/taxpayer" : ""
   tags                            = var.tags
 }
 
@@ -167,6 +168,8 @@ module "apim" {
   sku_name                     = var.apim_sku_name
   ao_api_identity_principal_id = module.security.ao_api_identity_principal_id
   enable_test_sp               = var.enable_test_sp
+  enable_no_role_test_sp       = var.enable_no_role_test_sp
+  app_insights_instrumentation_key = module.observability.app_insights_instrumentation_key
   backend_urls = {
     # Points APIM at the email assistant's /taxpayer/{tin} endpoint.
     # Uses try() so this works even when compute_platform = "aks" (no ACA module).
@@ -238,4 +241,15 @@ output "test_caller_client_secret" {
   value       = try(module.apim[0].test_caller_client_secret, null)
   sensitive   = true
   description = "Test SP client secret — null when enable_test_sp = false"
+}
+
+output "no_role_test_caller_client_id" {
+  value       = try(module.apim[0].no_role_test_caller_client_id, null)
+  description = "No-role test SP client ID for 403 testing — null when enable_no_role_test_sp = false"
+}
+
+output "no_role_test_caller_client_secret" {
+  value       = try(module.apim[0].no_role_test_caller_client_secret, null)
+  sensitive   = true
+  description = "No-role test SP client secret — null when enable_no_role_test_sp = false"
 }

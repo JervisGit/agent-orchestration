@@ -131,3 +131,9 @@ variable "enable_test_sp" {
   default     = false
   description = "Create a test service principal with App Roles for local APIM testing. Set false in production."
 }
+
+variable "enable_no_role_test_sp" {
+  type        = bool
+  default     = false
+  description = "Create a no-role test service principal for confirming APIM returns 403. Set false in production."
+}

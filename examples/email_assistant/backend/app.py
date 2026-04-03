@@ -55,6 +55,9 @@ DATABASE_URL    = os.getenv("DATABASE_URL",    "postgresql://ao:localdev@localho
 PLATFORM_URL    = os.getenv("AO_PLATFORM_URL", "http://localhost:8000")
 APIM_GATEWAY_URL = os.getenv("APIM_GATEWAY_URL", "")  # e.g. https://apim-ao-dev.azure-api.net
 APIM_SCOPE       = os.getenv("APIM_SCOPE", "")        # e.g. api://{tenant_id}/apim-ao-dev/.default
+# Full URL for the taxpayer lookup operation — injected by Terraform so app.py has
+# no knowledge of APIM path structure. Falls back to empty (direct DB path used).
+APIM_TAXPAYER_URL = os.getenv("APIM_TAXPAYER_URL", "")  # e.g. {gateway}/agents/taxpayer
 APP_ID          = "tax_email_assistant"
 
 # Service Bus — dead-letter failed stream runs (no-op locally when not set)
@@ -382,12 +385,12 @@ async def _tool_lookup_taxpayer(tin: str, identity: IdentityContext | None = Non
     When APIM_GATEWAY_URL is not set it falls back to the direct psycopg
     query (local dev with no Azure infrastructure).
     """
-    if APIM_GATEWAY_URL and identity is not None:
+    if APIM_TAXPAYER_URL and identity is not None:
         try:
             token = await _credential_provider.get_token(identity, APIM_SCOPE)
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(
-                    f"{APIM_GATEWAY_URL}/agents/taxpayer/{tin}",
+                    f"{APIM_TAXPAYER_URL}/{tin}",
                     headers={"Authorization": f"Bearer {token}"},
                 )
                 resp.raise_for_status()

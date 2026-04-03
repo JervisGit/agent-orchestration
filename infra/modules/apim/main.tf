@@ -40,6 +40,13 @@ variable "sku_name" {
   description = "'{tier}_{capacity}' — e.g. 'Consumption_0' (instant, pay-per-call) or 'Developer_1' (full-featured, ~45 min deploy). Consumption capacity is always 0."
 }
 
+variable "app_insights_instrumentation_key" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "Application Insights instrumentation key. When non-empty, wires APIM logs and metrics into the shared App Insights instance."
+}
+
 variable "ao_api_identity_principal_id" {
   type        = string
   description = "Object ID of the ao_api UAMI service principal — granted all App Roles for initial setup"
@@ -157,6 +164,49 @@ resource "azurerm_api_management" "ao" {
   }
 
   tags = var.tags
+}
+
+# ── Application Insights logger ────────────────────────────────────
+# Enables the "Requests" blade, metrics, and sampling in the APIM portal.
+# Only created when app_insights_instrumentation_key is supplied.
+
+resource "azurerm_api_management_logger" "ao" {
+  count               = var.app_insights_instrumentation_key != "" ? 1 : 0
+  name                = "ai-ao-${var.environment}"
+  api_management_name = azurerm_api_management.ao.name
+  resource_group_name = var.resource_group_name
+
+  application_insights {
+    instrumentation_key = var.app_insights_instrumentation_key
+  }
+}
+
+resource "azurerm_api_management_diagnostic" "ao" {
+  count                    = var.app_insights_instrumentation_key != "" ? 1 : 0
+  identifier               = "applicationinsights"
+  api_management_name      = azurerm_api_management.ao.name
+  resource_group_name      = var.resource_group_name
+  api_management_logger_id = azurerm_api_management_logger.ao[0].id
+
+  sampling_percentage       = 100
+  always_log_errors         = true
+  log_client_ip             = true
+  verbosity                 = "information"
+
+  frontend_request {
+    body_bytes = 0
+    headers_to_log = ["Authorization", "x-ms-client-request-id"]
+  }
+  frontend_response {
+    body_bytes = 0
+    headers_to_log = ["x-ms-request-id"]
+  }
+  backend_request {
+    body_bytes = 0
+  }
+  backend_response {
+    body_bytes = 0
+  }
 }
 
 # ── Named Values (referenced in policy XML as {{name}}) ───────────
@@ -360,6 +410,45 @@ output "test_caller_client_id" {
 
 output "test_caller_client_secret" {
   value     = var.enable_test_sp ? azuread_application_password.test_caller[0].value : null
+  sensitive = true
+}
+
+# ── No-role test service principal (local dev / security testing only) ────────
+# Deliberately has NO App Role assignments so calls always fail with 403.
+# Use to verify APIM policy denies unpermissioned callers.
+# To remove: set enable_no_role_test_sp = false in the environment tfvars.
+
+variable "enable_no_role_test_sp" {
+  type        = bool
+  default     = false
+  description = "Create a test service principal with zero App Roles. Used to confirm APIM returns 403 for unpermissioned callers."
+}
+
+resource "azuread_application" "no_role_test_caller" {
+  count        = var.enable_no_role_test_sp ? 1 : 0
+  display_name = "apim-ao-${var.environment}-no-role-test-caller"
+}
+
+resource "azuread_service_principal" "no_role_test_caller" {
+  count     = var.enable_no_role_test_sp ? 1 : 0
+  client_id = azuread_application.no_role_test_caller[0].client_id
+}
+
+resource "azuread_application_password" "no_role_test_caller" {
+  count          = var.enable_no_role_test_sp ? 1 : 0
+  application_id = azuread_application.no_role_test_caller[0].id
+  display_name   = "local-test-no-role"
+  end_date       = "2027-01-01T00:00:00Z"
+}
+# No azuread_app_role_assignment resources — intentional.
+
+output "no_role_test_caller_client_id" {
+  value     = var.enable_no_role_test_sp ? azuread_application.no_role_test_caller[0].client_id : null
+  sensitive = false
+}
+
+output "no_role_test_caller_client_secret" {
+  value     = var.enable_no_role_test_sp ? azuread_application_password.no_role_test_caller[0].value : null
   sensitive = true
 }
 
