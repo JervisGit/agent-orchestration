@@ -165,3 +165,4 @@ variable "enable_no_role_test_sp" {
   default     = false
   description = "Create a no-role test service principal for confirming APIM returns 403. Set false in production."
 }
+
