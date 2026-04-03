@@ -17,30 +17,31 @@ _PII_PATTERNS = {
 
 
 def check_pii(data: dict, rule: PolicyRule) -> PolicyResult:
-    """Detect PII in text. If action is 'redact', replace PII with [REDACTED]."""
-    text = data.get("input", "") or data.get("output", "")
-    if not isinstance(text, str):
-        text = str(text)
+    """Detect PII in text. If action is 'redact', replace PII with [REDACTED].
 
+    Each field ("input", "output") is scanned and redacted independently so
+    that redacting input never overwrites the output field and vice-versa.
+    """
     found: list[str] = []
-    redacted = text
-    for pii_type, pattern in _PII_PATTERNS.items():
-        if pattern.search(text):
-            found.append(pii_type)
-            if rule.action == PolicyAction.REDACT:
-                redacted = pattern.sub(f"[{pii_type.upper()}_REDACTED]", redacted)
+
+    for field in ("input", "output"):
+        field_text = data.get(field)
+        if not isinstance(field_text, str) or not field_text:
+            continue
+        field_redacted = field_text
+        for pii_type, pattern in _PII_PATTERNS.items():
+            if pattern.search(field_text):
+                if pii_type not in found:
+                    found.append(pii_type)
+                if rule.action == PolicyAction.REDACT:
+                    field_redacted = pattern.sub(f"[{pii_type.upper()}_REDACTED]", field_redacted)
+        if rule.action == PolicyAction.REDACT and field_redacted != field_text:
+            data[field] = field_redacted
 
     if found:
-        # Update the data in-place if redacting
-        if rule.action == PolicyAction.REDACT:
-            if "input" in data and data["input"]:
-                data["input"] = redacted
-            if "output" in data and data["output"]:
-                data["output"] = redacted
-
         return PolicyResult(
             rule_name=rule.name,
-            passed=rule.action == PolicyAction.REDACT,  # Redact passes (modified), block doesn't
+            passed=rule.action == PolicyAction.REDACT,  # Redact passes (modified), warn does not
             action=rule.action,
             detail=f"PII detected: {', '.join(found)}",
         )
