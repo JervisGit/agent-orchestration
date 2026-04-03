@@ -1,7 +1,7 @@
 """Policy evaluation engine — loads policies and evaluates at pre/post/runtime stages."""
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from ao.policy.schema import PolicyAction, PolicyRule, PolicySet, PolicyStage
@@ -17,6 +17,7 @@ class PolicyResult:
     passed: bool
     action: PolicyAction
     detail: str = ""
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass

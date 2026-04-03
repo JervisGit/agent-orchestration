@@ -154,6 +154,17 @@ STEP_LABELS: dict[str, str] = {
     "tool:lookup_taxpayer": "Agent looking up taxpayer record from database",
 }
 
+# ── Human-readable labels for content safety violation categories ────
+_SAFETY_CATEGORY_LABELS: dict[str, str] = {
+    "jailbreak":  "Jailbreak / Prompt Injection",
+    "toxicity":   "Threatening or Abusive Language",
+    "bias_bait":  "Discriminatory Content Request",
+    "Hate":       "Hate Speech",
+    "Violence":   "Violent Content",
+    "Sexual":     "Sexual Content",
+    "SelfHarm":   "Self-Harm Content",
+}
+
 # ── Policy engine ───────────────────────────────────────────────────
 # Policies are loaded from ao-manifest.yaml (policies_inline).
 # llm_judge is registered here because it requires LLM injection.
@@ -833,6 +844,20 @@ async def process_email_stream(email_id: str):
         )
         full_text = f"From: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"
 
+        # Open a Langfuse trace early so pre/post policy spans attach to the same
+        # root trace that ManifestExecutor will reference when astream() runs.
+        lf_trace_local = None
+        if langfuse_client:
+            try:
+                lf_trace_local = langfuse_client.trace(
+                    id=trace_id,
+                    name=f"workflow:{APP_ID}",
+                    input=full_text,
+                    metadata={"email_id": email_id, "sender": email["from"]},
+                )
+            except Exception:
+                pass
+
         yield f"data: {json.dumps({'type': 'start', 'trace_id': trace_id, 'resuming': resuming})}\n\n"
 
         full_text = f"From: {email['from']}\nSubject: {email['subject']}\n\n{email['body']}"
@@ -847,15 +872,35 @@ async def process_email_stream(email_id: str):
             policies,
             {"input": full_text},
         )
-        # Build step detail — show which provider ran and whether it blocked
+        # Build step detail — show provider name, blocked status, and violation category
         safety_result = next((r for r in pre_eval.results if r.rule_name == "content_safety"), None)
-        safety_detail: dict = {}
+        azure_configured = bool(os.getenv("AZURE_CONTENT_SAFETY_ENDPOINT"))
+        safety_detail: dict = {
+            "provider": "Azure AI Content Safety + Regex" if azure_configured else "Regex Pattern Matching",
+        }
         if safety_result:
-            provider = "azure+regex" if os.getenv("AZURE_CONTENT_SAFETY_ENDPOINT") else "regex"
-            safety_detail["provider"] = provider
+            meta = safety_result.metadata or {}
             safety_detail["blocked"] = not safety_result.passed
             if not safety_result.passed:
+                raw_cat = meta.get("category", "")
+                safety_detail["violation"] = _SAFETY_CATEGORY_LABELS.get(
+                    raw_cat, raw_cat or "Content Policy Violation"
+                )
+                safety_detail["detected_by"] = (
+                    "Azure AI Content Safety" if meta.get("provider") == "azure_ai"
+                    else "Pattern Matching"
+                )
                 safety_detail["reason"] = safety_result.detail
+        if lf_trace_local:
+            try:
+                lf_trace_local.span(
+                    name="policy:content_safety_pre",
+                    input={"stage": "pre_execution", "text_length": len(full_text)},
+                    output=safety_detail,
+                    level="WARNING" if not pre_eval.allowed else "DEFAULT",
+                )
+            except Exception:
+                pass
         yield f"data: {json.dumps({'type': 'step', 'node': 'input_safety_check', 'label': STEP_LABELS['input_safety_check'], 'detail': safety_detail})}\n\n"
         pii_warnings = [r.detail for r in pre_eval.results if not r.passed and r.action.value == "warn"]
         if not pre_eval.allowed:
@@ -968,21 +1013,49 @@ async def process_email_stream(email_id: str):
                 post_eval = await policy_engine.evaluate(
                     PolicyStage.POST_EXECUTION,
                     policies,
-                    {"output": final_state.get("output", "")},
+                    {"input": full_text, "output": final_state.get("output", "")},
                 )
                 flags.extend([r.detail for r in post_eval.results if not r.passed])
-                # Surface per-dimension judge verdicts so the UI can display them
+                # Structured per-policy results for the UI
+                policy_check_detail["policies"] = [
+                    {
+                        "name": r.rule_name.replace("_", " ").title(),
+                        "passed": r.passed,
+                        "action": r.action.value,
+                        **({"detail": r.detail} if r.detail else {}),
+                    }
+                    for r in post_eval.results
+                ]
+                # Surface LLM-as-judge per-dimension verdicts as a sub-step
                 judge_result = next(
                     (r for r in post_eval.results if r.rule_name == "llm_judge"), None
                 )
                 if judge_result:
-                    policy_check_detail["judge_flags"] = (
-                        [judge_result.detail] if not judge_result.passed else []
-                    )
-                policy_check_detail["flags"] = [r.detail for r in post_eval.results if not r.passed]
+                    verdicts = (judge_result.metadata or {}).get("verdicts", {})
+                    policy_check_detail["llm_judge"] = {
+                        "passed": judge_result.passed,
+                        "checks": [
+                            {
+                                "check": k,
+                                "verdict": v.get("verdict", "pass"),
+                                "reason": v.get("reason", ""),
+                            }
+                            for k, v in verdicts.items()
+                        ],
+                    }
                 # Apply any redactions back to the output
                 if post_eval.modified_data and post_eval.modified_data.get("output"):
                     final_state["output"] = post_eval.modified_data["output"]
+                if lf_trace_local:
+                    try:
+                        lf_trace_local.span(
+                            name="policy:guardrails_post",
+                            input={"stage": "post_execution"},
+                            output=policy_check_detail,
+                            level="WARNING" if flags else "DEFAULT",
+                        )
+                    except Exception:
+                        pass
             except Exception:
                 logger.exception("Post-execution policy evaluation failed")
             yield f"data: {json.dumps({'type': 'step', 'node': 'policy_check', 'label': STEP_LABELS['policy_check'], 'detail': policy_check_detail})}\n\n"

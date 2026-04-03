@@ -663,7 +663,31 @@
               det = `<div class="step-detail" style="color:var(--text2)">→ Skipped (no TIN in email)</div>`;
             else if (d.taxpayer_found === false)
               det = `<div class="step-detail" style="color:var(--yellow)">→ No taxpayer record found</div>`;
-            else if (d.category)
+            else if (s.node === 'input_safety_check') {
+              const providerBadge = `<span style="opacity:0.7">${esc(d.provider || '')}</span>`;
+              if (d.blocked) {
+                det = `<div class="step-detail" style="color:var(--red)">→ Blocked · <strong>${esc(d.violation || 'Policy violation')}</strong> · ${esc(d.detected_by || '')} ${providerBadge}</div>`;
+              } else {
+                det = `<div class="step-detail" style="color:var(--green)">→ Passed · ${providerBadge}</div>`;
+              }
+            } else if (s.node === 'policy_check') {
+              const pols = (d.policies || []).map(p => {
+                const icon = p.passed ? '✓' : (p.action === 'block' ? '✗' : '⚠');
+                const col  = p.passed ? 'var(--green)' : (p.action === 'block' ? 'var(--red)' : 'var(--yellow)');
+                return `<span style="color:${col}">${icon} ${esc(p.name)}</span>`;
+              }).join(' &nbsp; ');
+              let judgeRows = '';
+              if (d.llm_judge) {
+                const rows = (d.llm_judge.checks || []).map(c => {
+                  const icon = c.verdict === 'pass' ? '✓' : (c.verdict === 'fail' ? '✗' : '⚠');
+                  const col  = c.verdict === 'pass' ? 'var(--green)' : (c.verdict === 'fail' ? 'var(--red)' : 'var(--yellow)');
+                  const reason = c.reason ? ` — ${esc(c.reason)}` : '';
+                  return `<div style="padding:1px 0;color:${col}">${icon} ${esc(c.check)}${reason}</div>`;
+                }).join('');
+                judgeRows = `<details style="margin-top:4px"><summary style="cursor:pointer;font-size:10px;opacity:0.7">LLM-as-Judge details</summary><div style="padding:2px 0 0 8px;font-size:10px">${rows}</div></details>`;
+              }
+              det = `<div class="step-detail">${pols}${judgeRows}</div>`;
+            } else if (d.category)
               det = `<div class="step-detail">→ ${formatCat(d.category)}</div>`;
             else if (d.agents && d.agents.length)
               det = `<div class="step-detail">→ ${d.agents.map(a => formatCat(a)).join(', ')}</div>`;

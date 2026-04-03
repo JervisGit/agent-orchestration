@@ -64,6 +64,7 @@ def _check_regex(text: str, rule: PolicyRule) -> PolicyResult:
                     passed=False,
                     action=rule.action,
                     detail=f"Content safety violation [{category}] (regex): matched '{pattern.pattern[:60]}'",
+                    metadata={"category": category, "provider": "regex"},
                 )
     return PolicyResult(rule_name=rule.name, passed=True, action=rule.action)
 
@@ -115,6 +116,7 @@ async def _check_azure(text: str, rule: PolicyRule, endpoint: str, key: str) -> 
                         passed=False,
                         action=rule.action,
                         detail=detail,
+                        metadata={"category": str(item.category), "provider": "azure_ai", "severity": item.severity},
                     )
             logger.info("Content safety PASSED: Azure AI categories all below threshold %d", severity_threshold)
     except HttpResponseError as exc:

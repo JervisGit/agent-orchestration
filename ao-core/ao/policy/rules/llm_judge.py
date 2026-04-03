@@ -124,7 +124,7 @@ def make_llm_judge_handler(llm):
                 detail += " | WARN — " + "; ".join(warnings)
             logger.warning("llm_judge failed for output: %s", detail)
             return PolicyResult(rule_name=rule.name, passed=False, action=rule.action,
-                                detail=detail)
+                                detail=detail, metadata={"verdicts": results})
 
         detail = ""
         if warnings:
@@ -132,6 +132,6 @@ def make_llm_judge_handler(llm):
             logger.info("llm_judge warnings: %s", detail)
 
         return PolicyResult(rule_name=rule.name, passed=True, action=rule.action,
-                            detail=detail)
+                            detail=detail, metadata={"verdicts": results})
 
     return check_llm_judge
