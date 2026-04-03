@@ -95,6 +95,16 @@ variable "redis_url" {
   sensitive = true
   default   = ""
 }
+variable "apim_gateway_url" {
+  type        = string
+  default     = ""
+  description = "APIM gateway base URL — injected as APIM_GATEWAY_URL env var when non-empty"
+}
+variable "apim_scope" {
+  type        = string
+  default     = ""
+  description = "Token scope for agent tool calls, e.g. api://apim-ao-dev/.default — injected as APIM_SCOPE when non-empty"
+}
 variable "tags" { type = map(string) }
 
 # ── Container Apps Environment ─────────────────────────────────────
@@ -334,6 +344,20 @@ resource "azurerm_container_app" "email_assistant" {
       env {
         name  = "AO_PLATFORM_URL"
         value = "https://${azurerm_container_app.ao_api.ingress[0].fqdn}"
+      }
+      dynamic "env" {
+        for_each = var.apim_gateway_url != "" ? [1] : []
+        content {
+          name  = "APIM_GATEWAY_URL"
+          value = var.apim_gateway_url
+        }
+      }
+      dynamic "env" {
+        for_each = var.apim_scope != "" ? [1] : []
+        content {
+          name  = "APIM_SCOPE"
+          value = var.apim_scope
+        }
       }
     }
   }

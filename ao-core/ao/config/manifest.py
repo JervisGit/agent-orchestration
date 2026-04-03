@@ -59,6 +59,15 @@ class AgentConfig:
     # The thinking text is extracted and emitted as a separate SSE event so the
     # UI can display an expandable "Agent reasoning" section before the reply.
     show_reasoning: bool = False
+    # UAMI client ID for this agent's tool calls.  When set, ManifestExecutor
+    # builds a SERVICE IdentityContext with this client_id so the agent uses
+    # its own managed identity rather than the app-level identity.
+    # Migration path from App-Roles blanket assignment to per-agent isolation:
+    #   1. Create a UAMI per agent type in infra/modules/security/main.tf
+    #   2. Assign the required App Roles to each UAMI in infra/modules/apim/main.tf
+    #   3. Set identity_client_id here in ao-manifest.yaml
+    # Leave empty (the default) to use the app's identity_mode and service_principal_id.
+    identity_client_id: str | None = None
 
 
 @dataclass

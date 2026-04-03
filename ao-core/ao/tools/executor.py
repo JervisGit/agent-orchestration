@@ -2,8 +2,22 @@
 
 Ensures tools are only executed if the current identity context has the
 required permission level.
+
+Identity injection
+------------------
+After identity validation, execute() inspects the tool callable's signature.
+If it declares an `identity` parameter, the IdentityContext is injected as a
+kwarg so the tool can acquire a Bearer token via:
+
+    async def my_tool(tin: str, identity: IdentityContext | None = None) -> dict:
+        token = await credential_provider.get_token(identity, APIM_SCOPE)
+        ...
+
+Tools that do NOT declare `identity` are called unchanged — no impact on
+existing tool implementations.
 """
 
+import inspect
 import logging
 from typing import Any
 
@@ -42,8 +56,16 @@ class ToolExecutor:
             identity.mode.value,
         )
 
+        call_args = dict(args or {})
+
+        # Inject identity only if the tool explicitly declares the parameter —
+        # keeps existing tools unchanged while opt-in tools get the context.
+        sig = inspect.signature(spec.fn)
+        if "identity" in sig.parameters:
+            call_args["identity"] = identity
+
         import asyncio
 
         if asyncio.iscoroutinefunction(spec.fn):
-            return await spec.fn(**(args or {}))
-        return spec.fn(**(args or {}))
+            return await spec.fn(**call_args)
+        return spec.fn(**call_args)

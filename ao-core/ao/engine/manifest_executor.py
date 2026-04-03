@@ -83,6 +83,7 @@ from langgraph.graph import END, StateGraph
 
 from ao.config.manifest import AgentConfig, AppManifest
 from ao.engine.patterns.router import RouterState
+from ao.identity.context import IdentityContext, IdentityMode
 from ao.llm.base import LLMProvider
 from ao.tools.schema import AgentMessage, ToolResult, ToolSchema
 
@@ -278,6 +279,44 @@ class ManifestExecutor:
 
         return {"verdict": verdict, "reason": reason}
 
+    # ── Identity helpers ─────────────────────────────────────────────
+
+    def _resolve_identity(self, state: dict, cfg: AgentConfig | None = None) -> IdentityContext | None:
+        """Return the IdentityContext to use for a tool call.
+
+        Resolution order (most specific wins):
+        1. cfg.identity_client_id — per-agent UAMI override (SERVICE mode)
+        2. state["_identity"]     — caller-supplied context (supports USER_DELEGATED)
+        3. AppManifest defaults   — service_principal_id / identity_mode
+
+        Returns None only when there is no identity information at all, in which
+        case tools that do not declare `identity` are called without it (current
+        behaviour for tools that ignore identity entirely).
+        """
+        # Per-agent UAMI override
+        if cfg and cfg.identity_client_id:
+            return IdentityContext(
+                mode=IdentityMode.SERVICE,
+                tenant_id=getattr(state.get("_identity"), "tenant_id", "") or "",
+                managed_identity_client_id=cfg.identity_client_id,
+            )
+
+        # Caller-supplied context (e.g. forwarded from the inbound HTTP request)
+        if state_identity := state.get("_identity"):
+            if isinstance(state_identity, IdentityContext):
+                return state_identity
+
+        # Fall back to app-level manifest defaults
+        manifest = self._manifest
+        if manifest.service_principal_id or manifest.identity_mode != IdentityMode.SERVICE:
+            return IdentityContext(
+                mode=manifest.identity_mode,
+                tenant_id="",  # resolved by azure-identity from the environment
+                managed_identity_client_id=manifest.service_principal_id,
+            )
+
+        return None
+
     async def _execute_tool_call(
         self,
         call_id: str,
@@ -285,6 +324,7 @@ class ManifestExecutor:
         arguments_json: str,
         state: dict,
         lf_trace: Any | None,
+        identity: IdentityContext | None = None,
     ) -> tuple[dict, dict]:
         """Execute a registered tool; return (tool_message, state_update)."""
         if tool_name not in self._tools:
@@ -347,7 +387,13 @@ class ManifestExecutor:
         token_queue = self._token_queues.get(trace_id)
 
         try:
-            raw = await fn(**args) if asyncio.iscoroutinefunction(fn) else fn(**args)
+            # Inject identity into tool callables that declare the parameter.
+            # Tools that do not declare `identity` are unaffected.
+            import inspect
+            call_args = dict(args)
+            if identity is not None and "identity" in inspect.signature(fn).parameters:
+                call_args["identity"] = identity
+            raw = await fn(**call_args) if asyncio.iscoroutinefunction(fn) else fn(**call_args)
         except Exception as exc:
             logger.warning("Tool %s raised: %s", tool_name, exc, exc_info=True)
             raw = f"Error executing {tool_name}: {exc}"
@@ -788,7 +834,8 @@ class ManifestExecutor:
                     # Execute each tool and append results
                     for tc in resp.tool_calls:
                         tool_msg, state_update = await executor._execute_tool_call(
-                            tc["id"], tc["name"], tc["arguments"], state, lf_trace
+                            tc["id"], tc["name"], tc["arguments"], state, lf_trace,
+                            identity=executor._resolve_identity(state, cfg),
                         )
                         messages.append(tool_msg)
                         extra_state.update(state_update)
@@ -1029,7 +1076,8 @@ class ManifestExecutor:
                     })
                     for tc in resp.tool_calls:
                         tool_msg, state_update = await executor._execute_tool_call(
-                            tc["id"], tc["name"], tc["arguments"], state, lf_trace
+                            tc["id"], tc["name"], tc["arguments"], state, lf_trace,
+                            identity=executor._resolve_identity(state, cfg),
                         )
                         messages.append(tool_msg)
                         extra_state.update(state_update)

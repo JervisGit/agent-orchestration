@@ -10,6 +10,11 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 2.0"
+    }
   }
 
   backend "azurerm" {
@@ -21,6 +26,9 @@ provider "azurerm" {
   features {}
   subscription_id = var.subscription_id
 }
+
+# azuread uses the same Azure CLI / service principal credentials as azurerm
+provider "azuread" {}
 
 data "azurerm_resource_group" "main" {
   name = var.resource_group_name
@@ -128,6 +136,8 @@ module "aca" {
   email_assistant_langfuse_secret_key  = var.email_assistant_langfuse_secret_key
   servicebus_connection_string    = module.messaging.servicebus_connection_string
   redis_url                       = module.database.redis_connection_string
+  apim_gateway_url                = try(module.apim[0].apim_gateway_url, "")
+  apim_scope                      = try(module.apim[0].apim_app_identifier_uri, "") != "" ? "${try(module.apim[0].apim_app_identifier_uri, "")}/.default" : ""
   tags                            = var.tags
 }
 
@@ -140,6 +150,23 @@ module "aks" {
   aks_cluster_name    = var.aks_cluster_name
   acr_id              = module.registry.acr_id
   tags                = var.tags
+}
+
+# ── APIM: identity gateway for agent tool calls (compute-platform-agnostic) ───
+# Toggle with var.enable_apim. Works identically whether compute is ACA or AKS.
+
+module "apim" {
+  source = "./modules/apim"
+  count  = var.enable_apim ? 1 : 0
+
+  environment                  = var.environment
+  resource_group_name          = data.azurerm_resource_group.main.name
+  location                     = var.location
+  publisher_email              = var.apim_publisher_email
+  publisher_name               = var.apim_publisher_name
+  sku_name                     = var.apim_sku_name
+  ao_api_identity_principal_id = module.security.ao_api_identity_principal_id
+  tags                         = var.tags
 }
 
 # ── Outputs ────────────────────────────────────────────────────────
@@ -184,4 +211,14 @@ output "openai_endpoint" {
 
 output "key_vault_uri" {
   value = module.security.key_vault_uri
+}
+
+output "apim_gateway_url" {
+  value       = try(module.apim[0].apim_gateway_url, null)
+  description = "APIM gateway base URL — null when enable_apim = false"
+}
+
+output "apim_app_identifier_uri" {
+  value       = try(module.apim[0].apim_app_identifier_uri, null)
+  description = "Token scope for agents: {uri}/.default — null when enable_apim = false"
 }

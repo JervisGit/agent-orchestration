@@ -99,3 +99,29 @@ variable "tags" {
     managedBy = "terraform"
   }
 }
+
+# ── APIM ────────────────────────────────────────────────────────────
+
+variable "enable_apim" {
+  type        = bool
+  default     = false
+  description = "Provision Azure API Management as the identity gateway for agent tool calls. Set true to enable."
+}
+
+variable "apim_publisher_email" {
+  type        = string
+  default     = ""
+  description = "Contact email for the APIM instance (required when enable_apim = true)"
+}
+
+variable "apim_publisher_name" {
+  type        = string
+  default     = "AO Platform Team"
+  description = "Publisher organisation name shown in the APIM developer portal"
+}
+
+variable "apim_sku_name" {
+  type        = string
+  default     = "Consumption_0"
+  description = "'{tier}_{capacity}' — e.g. 'Consumption_0' (instant, pay-per-call) or 'Developer_1' (full-featured, ~45 min deploy). Consumption capacity is always 0."
+}
