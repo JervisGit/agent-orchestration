@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Graph Compliance Investigation</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f3f2f1; color: #323130; min-height: 100vh; }
+  header { background: #0078d4; color: #fff; padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 20px; font-weight: 600; }
+  header span { font-size: 13px; opacity: .8; }
+  .container { max-width: 960px; margin: 0 auto; padding: 32px 24px; display: grid; grid-template-columns: 280px 1fr; gap: 24px; }
+  @media (max-width: 700px) { .container { grid-template-columns: 1fr; } }
+
+  .sidebar .card { background: #fff; border-radius: 4px; box-shadow: 0 1.6px 3.6px rgba(0,0,0,.13); padding: 16px; margin-bottom: 16px; }
+  .sidebar h3 { font-size: 13px; font-weight: 600; color: #605e5c; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 10px; }
+  .entity-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
+  .entity-item { padding: 6px 10px; border-radius: 2px; font-size: 12px; cursor: pointer; border: 1px solid transparent; }
+  .entity-item:hover { background: #f3f2f1; }
+  .entity-item.HIGH { border-left: 3px solid #d13438; }
+  .entity-item.MEDIUM { border-left: 3px solid #ca5010; }
+  .entity-item.LOW { border-left: 3px solid #107c10; }
+  .entity-name { font-weight: 500; }
+  .entity-type { color: #8a8886; font-size: 11px; }
+  .risk-badge { float: right; font-size: 10px; padding: 1px 5px; border-radius: 10px; font-weight: 600; }
+  .risk-HIGH { background: #fde7e9; color: #a4262c; }
+  .risk-MEDIUM { background: #fff4ce; color: #7a3e01; }
+  .risk-LOW { background: #dff6dd; color: #0b6f0b; }
+
+  .suggest-btns { display: flex; flex-direction: column; gap: 6px; }
+  .suggest-btn { background: #f3f2f1; border: 1px solid #e1dfdd; border-radius: 2px; padding: 8px 10px; font-size: 12px; text-align: left; cursor: pointer; }
+  .suggest-btn:hover { background: #edebe9; }
+
+  .main-panel {}
+  .query-box { background: #fff; border-radius: 4px; box-shadow: 0 1.6px 3.6px rgba(0,0,0,.13); padding: 20px; margin-bottom: 20px; }
+  .query-row { display: flex; gap: 10px; }
+  textarea#queryInput { flex: 1; border: 1px solid #8a8886; border-radius: 2px; padding: 8px 12px; font-size: 14px; font-family: inherit; resize: vertical; min-height: 70px; outline: none; }
+  textarea#queryInput:focus { border-color: #0078d4; }
+  .query-actions { display: flex; flex-direction: column; gap: 8px; }
+  button.primary { background: #0078d4; color: #fff; border: none; border-radius: 2px; padding: 9px 18px; font-size: 14px; cursor: pointer; font-weight: 600; white-space: nowrap; }
+  button.primary:disabled { background: #a19f9d; cursor: not-allowed; }
+  button.primary:hover:not(:disabled) { background: #106ebe; }
+
+  .card { background: #fff; border-radius: 4px; box-shadow: 0 1.6px 3.6px rgba(0,0,0,.13); padding: 20px; margin-bottom: 16px; }
+  .card h3 { font-size: 13px; font-weight: 600; color: #605e5c; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
+
+  .steps { display: flex; flex-direction: column; gap: 5px; }
+  .step { display: flex; align-items: flex-start; gap: 10px; padding: 6px 10px; background: #faf9f8; border-left: 3px solid #0078d4; font-size: 13px; border-radius: 0 2px 2px 0; }
+  .step.tool  { border-color: #8764b8; }
+  .step.supervisor { border-color: #0078d4; font-style: italic; }
+  .step-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+  details.reasoning { margin-top: 4px; font-size: 12px; }
+  details.reasoning summary { cursor: pointer; color: #605e5c; }
+  details.reasoning pre { background: #f8f8f8; padding: 8px; border-radius: 2px; margin-top: 4px; white-space: pre-wrap; font-family: 'Cascadia Code', Consolas, monospace; font-size: 11px; color: #444; }
+
+  .report-box { font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
+  .cursor { display: inline-block; width: 2px; height: 1em; background: #0078d4; animation: blink 0.8s steps(1) infinite; vertical-align: text-bottom; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  .error-box { background: #fde7e9; border-left: 4px solid #d13438; padding: 12px 16px; border-radius: 2px; font-size: 14px; color: #a4262c; margin-bottom: 16px; }
+  .trace-link { font-size: 12px; color: #0078d4; text-decoration: none; margin-top: 8px; display: inline-block; }
+  .trace-link:hover { text-decoration: underline; }
+
+  .stats-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
+  .stat { background: #f3f2f1; padding: 6px 12px; border-radius: 2px; font-size: 12px; }
+  .stat strong { color: #0078d4; }
+</style>
+</head>
+<body>
+<header>
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" fill="white"/><line x1="12" y1="2" x2="12" y2="7" stroke="white" stroke-width="2"/><line x1="12" y1="17" x2="12" y2="22" stroke="white" stroke-width="2"/><line x1="2" y1="12" x2="7" y2="12" stroke="white" stroke-width="2"/><line x1="17" y1="12" x2="22" y2="12" stroke="white" stroke-width="2"/><line x1="5.5" y1="5.5" x2="8.5" y2="8.5" stroke="white" stroke-width="2"/><line x1="15.5" y1="15.5" x2="18.5" y2="18.5" stroke="white" stroke-width="2"/><line x1="18.5" y1="5.5" x2="15.5" y2="8.5" stroke="white" stroke-width="2"/><line x1="8.5" y1="15.5" x2="5.5" y2="18.5" stroke="white" stroke-width="2"/></svg>
+  <h1>Graph Compliance Investigation</h1>
+  <span>Powered by AO — Supervisor pattern + NetworkX knowledge graph</span>
+</header>
+
+<div class="container">
+  <div class="sidebar">
+    <div class="card">
+      <h3>Knowledge Graph</h3>
+      <div id="graphStats" class="stats-row"></div>
+    </div>
+    <div class="card">
+      <h3>Entities</h3>
+      <div class="entity-list" id="entityList"></div>
+    </div>
+    <div class="card">
+      <h3>Sample Queries</h3>
+      <div class="suggest-btns" id="suggestions">
+        <button class="suggest-btn" onclick="setQuery(this.textContent)">Investigate Apex Holdings Pte Ltd — look into its ownership structure and risk indicators</button>
+        <button class="suggest-btn" onclick="setQuery(this.textContent)">Who controls Nexus Capital Pte Ltd and what are the connections back to Singapore entities?</button>
+        <button class="suggest-btn" onclick="setQuery(this.textContent)">Find the relationship between James Lim Boon Huat and the offshore entities</button>
+        <button class="suggest-btn" onclick="setQuery(this.textContent)">Is there a circular ownership structure involving any Singapore companies?</button>
+        <button class="suggest-btn" onclick="setQuery(this.textContent)">Assess the risk of Tan Wei Liang given his multiple directorships</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="main-panel">
+    <div class="query-box">
+      <div class="query-row">
+        <textarea id="queryInput" placeholder="Enter a compliance investigation query…"></textarea>
+        <div class="query-actions">
+          <button class="primary" id="investigateBtn" onclick="doInvestigate()">Investigate</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="error" class="error-box" style="display:none;"></div>
+
+    <div id="stepsCard" class="card" style="display:none;">
+      <h3>Investigation Workflow</h3>
+      <div class="steps" id="steps"></div>
+    </div>
+
+    <div id="reportCard" class="card" style="display:none;">
+      <h3>Investigation Report</h3>
+      <div class="report-box" id="reportText"></div>
+      <a id="traceLink" class="trace-link" href="#" target="_blank" style="display:none;"></a>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+
+async function loadSidebarData() {
+  try {
+    const [statsRes, entRes] = await Promise.all([
+      fetch(`${API}/api/graph/stats`),
+      fetch(`${API}/api/graph/entities`),
+    ]);
+    const stats = await statsRes.json();
+    const ents  = await entRes.json();
+
+    document.getElementById('graphStats').innerHTML = [
+      `<div class="stat"><strong>${stats.node_count}</strong> nodes</div>`,
+      `<div class="stat"><strong>${stats.edge_count}</strong> edges</div>`,
+      `<div class="stat"><strong>${(stats.high_risk_entities||[]).length}</strong> high-risk</div>`,
+    ].join('');
+
+    const list = document.getElementById('entityList');
+    list.innerHTML = ents.entities.map(e =>
+      `<div class="entity-item ${e.risk_level}" onclick="setQuery('Investigate ${e.name} in detail')">
+        <span class="risk-badge risk-${e.risk_level}">${e.risk_level}</span>
+        <div class="entity-name">${escHtml(e.name)}</div>
+        <div class="entity-type">${e.type}${e.country ? ' · ' + e.country : ''}</div>
+      </div>`
+    ).join('');
+  } catch(e) { /* sidebar is non-critical */ }
+}
+loadSidebarData();
+
+function setQuery(text) {
+  document.getElementById('queryInput').value = text;
+  document.getElementById('queryInput').focus();
+}
+
+let currentES = null;
+function doInvestigate() {
+  const q = document.getElementById('queryInput').value.trim();
+  if (!q) return;
+  if (currentES) currentES.close();
+
+  document.getElementById('error').style.display = 'none';
+  document.getElementById('stepsCard').style.display = 'none';
+  document.getElementById('reportCard').style.display = 'none';
+  document.getElementById('steps').innerHTML = '';
+  document.getElementById('reportText').innerHTML = '';
+  document.getElementById('traceLink').style.display = 'none';
+  document.getElementById('investigateBtn').disabled = true;
+
+  let reportBuf = '';
+  let streaming = false;
+  let pendingReasoning = null;
+
+  const es = new EventSource(`${API}/api/investigate/stream?q=${encodeURIComponent(q)}`);
+  currentES = es;
+
+  es.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'start') {
+      document.getElementById('stepsCard').style.display = '';
+    }
+
+    if (msg.type === 'reasoning') {
+      pendingReasoning = msg.text;
+    }
+
+    if (msg.type === 'step') {
+      const steps = document.getElementById('steps');
+      const isTool = msg.node.startsWith('tool:');
+      const isSuper = msg.node === 'compliance_planner';
+      const icon = isTool ? '🔍' : isSuper ? '🧭' : '⚙️';
+      const div = document.createElement('div');
+      div.className = `step${isTool ? ' tool' : isSuper ? ' supervisor' : ''}`;
+      let inner = `<span class="step-icon">${icon}</span><div><strong>${escHtml(msg.label || msg.node)}</strong>`;
+      if (msg.detail && Object.keys(msg.detail).length) {
+        inner += `<br><span style="font-size:11px;color:#8a8886">${escHtml(JSON.stringify(msg.detail).substring(0, 120))}</span>`;
+      }
+      if (pendingReasoning) {
+        inner += `<details class="reasoning"><summary>Agent reasoning…</summary><pre>${escHtml(pendingReasoning)}</pre></details>`;
+        pendingReasoning = null;
+      }
+      inner += '</div>';
+      div.innerHTML = inner;
+      steps.appendChild(div);
+    }
+
+    if (msg.type === 'token') {
+      if (!streaming) {
+        document.getElementById('reportCard').style.display = '';
+        streaming = true;
+      }
+      reportBuf += msg.token;
+      document.getElementById('reportText').innerHTML = escHtml(reportBuf) + '<span class="cursor"></span>';
+    }
+
+    if (msg.type === 'complete') {
+      document.getElementById('reportCard').style.display = '';
+      document.getElementById('reportText').textContent = msg.result.report;
+      if (msg.result.langfuse_url) {
+        const a = document.getElementById('traceLink');
+        a.href = msg.result.langfuse_url;
+        a.textContent = `View trace in Langfuse (${msg.result.trace_id.slice(0,8)}…)`;
+        a.style.display = '';
+      }
+      document.getElementById('investigateBtn').disabled = false;
+      es.close();
+    }
+
+    if (msg.type === 'error') {
+      document.getElementById('error').textContent = msg.message;
+      document.getElementById('error').style.display = '';
+      document.getElementById('investigateBtn').disabled = false;
+      es.close();
+    }
+  };
+  es.onerror = () => { document.getElementById('investigateBtn').disabled = false; es.close(); };
+}
+
+function escHtml(t) {
+  return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>

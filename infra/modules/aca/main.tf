@@ -110,6 +110,26 @@ variable "apim_taxpayer_url" {
   default     = ""
   description = "Full APIM URL for taxpayer lookup, e.g. {gateway}/agents/taxpayer — injected as APIM_TAXPAYER_URL when non-empty"
 }
+variable "rag_search_langfuse_public_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+variable "rag_search_langfuse_secret_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+variable "graph_compliance_langfuse_public_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+variable "graph_compliance_langfuse_secret_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
 variable "tags" { type = map(string) }
 
 # ── Container Apps Environment ─────────────────────────────────────
@@ -392,6 +412,210 @@ resource "azurerm_container_app" "email_assistant" {
   tags = var.tags
 }
 
+# ── RAG Search Container App ─────────────────────────────────────
+
+resource "azurerm_container_app" "rag_search" {
+  name                         = "ca-rag-search-${var.environment}"
+  container_app_environment_id = azurerm_container_app_environment.ao.id
+  resource_group_name          = var.resource_group_name
+  revision_mode                = "Single"
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [var.ao_api_identity_id]
+  }
+
+  registry {
+    server   = var.acr_login_server
+    identity = var.ao_api_identity_id
+  }
+
+  secret {
+    name  = "database-url"
+    value = var.database_url
+  }
+  secret {
+    name  = "openai-api-key"
+    value = var.openai_api_key
+  }
+  dynamic "secret" {
+    for_each = var.rag_search_langfuse_public_key != "" ? [1] : []
+    content {
+      name  = "langfuse-public-key"
+      value = var.rag_search_langfuse_public_key
+    }
+  }
+  dynamic "secret" {
+    for_each = var.rag_search_langfuse_secret_key != "" ? [1] : []
+    content {
+      name  = "langfuse-secret-key"
+      value = var.rag_search_langfuse_secret_key
+    }
+  }
+
+  template {
+    min_replicas = 0
+    max_replicas = 2
+
+    container {
+      name   = "rag-search"
+      image  = "mcr.microsoft.com/k8se/quickstart:latest"
+      cpu    = 0.5
+      memory = "1Gi"
+
+      env {
+        name  = "ENVIRONMENT"
+        value = var.environment
+      }
+      env {
+        name        = "DATABASE_URL"
+        secret_name = "database-url"
+      }
+      env {
+        name        = "OPENAI_API_KEY"
+        secret_name = "openai-api-key"
+      }
+      dynamic "env" {
+        for_each = var.rag_search_langfuse_public_key != "" ? [1] : []
+        content {
+          name        = "LANGFUSE_PUBLIC_KEY"
+          secret_name = "langfuse-public-key"
+        }
+      }
+      dynamic "env" {
+        for_each = var.rag_search_langfuse_secret_key != "" ? [1] : []
+        content {
+          name        = "LANGFUSE_SECRET_KEY"
+          secret_name = "langfuse-secret-key"
+        }
+      }
+      env {
+        name  = "LANGFUSE_HOST"
+        value = local.langfuse_url
+      }
+      env {
+        name  = "AO_PLATFORM_URL"
+        value = "https://${azurerm_container_app.ao_api.ingress[0].fqdn}"
+      }
+    }
+  }
+
+  ingress {
+    external_enabled = true
+    target_port      = 8002
+    transport        = "http"
+
+    traffic_weight {
+      percentage      = 100
+      latest_revision = true
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [template[0].container[0].image]
+  }
+
+  tags = var.tags
+}
+
+# ── Graph Compliance Container App ────────────────────────────────
+
+resource "azurerm_container_app" "graph_compliance" {
+  name                         = "ca-graph-compliance-${var.environment}"
+  container_app_environment_id = azurerm_container_app_environment.ao.id
+  resource_group_name          = var.resource_group_name
+  revision_mode                = "Single"
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [var.ao_api_identity_id]
+  }
+
+  registry {
+    server   = var.acr_login_server
+    identity = var.ao_api_identity_id
+  }
+
+  secret {
+    name  = "openai-api-key"
+    value = var.openai_api_key
+  }
+  dynamic "secret" {
+    for_each = var.graph_compliance_langfuse_public_key != "" ? [1] : []
+    content {
+      name  = "langfuse-public-key"
+      value = var.graph_compliance_langfuse_public_key
+    }
+  }
+  dynamic "secret" {
+    for_each = var.graph_compliance_langfuse_secret_key != "" ? [1] : []
+    content {
+      name  = "langfuse-secret-key"
+      value = var.graph_compliance_langfuse_secret_key
+    }
+  }
+
+  template {
+    min_replicas = 0
+    max_replicas = 2
+
+    container {
+      name   = "graph-compliance"
+      image  = "mcr.microsoft.com/k8se/quickstart:latest"
+      cpu    = 0.5
+      memory = "1Gi"
+
+      env {
+        name  = "ENVIRONMENT"
+        value = var.environment
+      }
+      env {
+        name        = "OPENAI_API_KEY"
+        secret_name = "openai-api-key"
+      }
+      dynamic "env" {
+        for_each = var.graph_compliance_langfuse_public_key != "" ? [1] : []
+        content {
+          name        = "LANGFUSE_PUBLIC_KEY"
+          secret_name = "langfuse-public-key"
+        }
+      }
+      dynamic "env" {
+        for_each = var.graph_compliance_langfuse_secret_key != "" ? [1] : []
+        content {
+          name        = "LANGFUSE_SECRET_KEY"
+          secret_name = "langfuse-secret-key"
+        }
+      }
+      env {
+        name  = "LANGFUSE_HOST"
+        value = local.langfuse_url
+      }
+      env {
+        name  = "AO_PLATFORM_URL"
+        value = "https://${azurerm_container_app.ao_api.ingress[0].fqdn}"
+      }
+    }
+  }
+
+  ingress {
+    external_enabled = true
+    target_port      = 8003
+    transport        = "http"
+
+    traffic_weight {
+      percentage      = 100
+      latest_revision = true
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [template[0].container[0].image]
+  }
+
+  tags = var.tags
+}
+
 # ── Outputs ────────────────────────────────────────────────────────
 
 # ── Langfuse (Self-Hosted) Container App ─────────────────────────
@@ -563,4 +787,12 @@ output "environment_id" {
 
 output "langfuse_url" {
   value = "https://${azurerm_container_app.langfuse.ingress[0].fqdn}"
+}
+
+output "rag_search_url" {
+  value = "https://${azurerm_container_app.rag_search.ingress[0].fqdn}"
+}
+
+output "graph_compliance_url" {
+  value = "https://${azurerm_container_app.graph_compliance.ingress[0].fqdn}"
 }

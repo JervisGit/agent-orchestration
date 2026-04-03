@@ -49,12 +49,13 @@ async def healthz():
     """Health check used by ACA/AKS liveness and readiness probes."""
     checks: dict[str, str] = {}
 
-    # Database ping
+    # Database ping (sync psycopg in thread — works on Windows ProactorEventLoop)
     try:
-        async with await psycopg.AsyncConnection.connect(
-            _DATABASE_URL, connect_timeout=3
-        ) as conn:
-            await conn.execute("SELECT 1")
+        import asyncio
+        def _ping():
+            with psycopg.connect(_DATABASE_URL, connect_timeout=3) as conn:
+                conn.execute("SELECT 1")
+        await asyncio.to_thread(_ping)
         checks["db"] = "ok"
     except Exception as exc:
         checks["db"] = f"error: {exc}"

@@ -38,11 +38,11 @@ from ao.config.manifest import AppManifest
 from ao.engine.manifest_executor import ManifestExecutor
 from ao.identity.context import IdentityContext, IdentityMode
 from ao.identity.entra import EntraCredentialProvider
-from ao.llm.base import LLMProvider
 from ao.memory.short_term import ShortTermMemory
 from ao.policy.engine import PolicyEngine
 from ao.policy.schema import PolicySet, PolicyStage
 from ao.policy.rules.llm_judge import make_llm_judge_handler
+from ao.runtime import AppRuntime
 
 # ── Config ─────────────────────────────────────────────────────────
 try:
@@ -89,63 +89,26 @@ _configure_logging()
 logger = logging.getLogger("tax_email_assistant")
 
 
-# ── LLM ────────────────────────────────────────────────────────────
-def _create_llm() -> LLMProvider:
-    if os.getenv("OPENAI_API_KEY"):
-        from ao.llm.openai import OpenAIProvider
-        return OpenAIProvider(
-            api_key=os.environ["OPENAI_API_KEY"],
-            default_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
-        )
-    if os.getenv("AZURE_OPENAI_ENDPOINT"):
-        from ao.llm.azure_openai import AzureOpenAIProvider
-        return AzureOpenAIProvider(
-            endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-        )
-    if os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_MODEL"):
-        from ao.llm.ollama import OllamaProvider
-        return OllamaProvider(
-            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-            default_model=os.getenv("OLLAMA_MODEL", "gemma3:1b"),
-        )
-    raise RuntimeError("No LLM configured. Set OPENAI_API_KEY in .env")
-
-llm = _create_llm()
-
-# ── Langfuse observability client ──────────────────────────────────
-def _create_langfuse_client() -> Any | None:
-    pk = os.getenv("LANGFUSE_PUBLIC_KEY")
-    sk = os.getenv("LANGFUSE_SECRET_KEY")
-    if pk and sk:
-        from langfuse import Langfuse
-        return Langfuse(
-            public_key=pk,
-            secret_key=sk,
-            host=os.getenv("LANGFUSE_HOST", "http://localhost:3000"),
-        )
-    return None
-
-langfuse_client = _create_langfuse_client()
+# ── AppRuntime — LLM + Langfuse + ManifestExecutor from env vars ──
+# Replaces the individual _create_llm() / _create_langfuse_client() factories
+# that used to live here.  Any other AO-integrated app can do the same with
+# two lines: runtime = AppRuntime.from_env(MANIFEST_PATH).
+_runtime = AppRuntime.from_env(MANIFEST_PATH)
+manifest      = _runtime.manifest
+executor      = _runtime.executor
+llm           = _runtime.llm
+langfuse_client = _runtime.langfuse_client
 
 # ── Credential provider (used by APIM-backed tools) ────────────────
-# client_id / client_secret are only needed for OBO (user-delegated) flow.
-# For service identity (this app's UAMI), DefaultAzureCredential is used.
 _credential_provider = EntraCredentialProvider(
     client_id=os.getenv("AO_CLIENT_ID"),
     client_secret=os.getenv("AO_CLIENT_SECRET"),
 )
 
-# ── ManifestExecutor ────────────────────────────────────────────────
-# Reads ao-manifest.yaml and builds the LangGraph automatically.
-# No StateGraph / add_node / add_edge code in this file.
-manifest = AppManifest.from_yaml(MANIFEST_PATH)
-executor = ManifestExecutor(manifest, llm=llm, langfuse_client=langfuse_client)
-
 # ── Supervisor-pattern executor (used for em-008) ────────────────────
 _SUPERVISOR_MANIFEST_PATH = Path(__file__).parent.parent / "ao-manifest-supervisor.yaml"
-manifest_sv = AppManifest.from_yaml(_SUPERVISOR_MANIFEST_PATH)
-executor_sv = ManifestExecutor(manifest_sv, llm=llm, langfuse_client=langfuse_client)
+_runtime_sv   = AppRuntime.from_env(_SUPERVISOR_MANIFEST_PATH)
+executor_sv   = _runtime_sv.executor
 
 # ── Active stream tracking — email_id -> trace_id ───────────────────
 # Used by the /cancel endpoint to look up which executor + trace to stop.
@@ -256,28 +219,6 @@ async def _persist_email_state(email_id: str, email: dict) -> None:
         logger.warning("Could not persist email %s to Redis: %s", email_id, exc)
 
 
-async def _load_policies_from_platform(app_id: str) -> PolicySet | None:
-    """Fetch policies from the AO Platform API; return None on any failure."""
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(
-                f"{PLATFORM_URL}/api/policies/",
-                params={"app_id": app_id},
-            )
-            resp.raise_for_status()
-            pols = (resp.json() or {}).get("policies", [])
-            if not pols:
-                return None
-            yaml_lines = ["policies:"]
-            for p in pols:
-                yaml_lines.append(f"  - name: {p['name']}")
-                yaml_lines.append(f"    stage: {p['stage']}")
-                yaml_lines.append(f"    action: {p['action']}")
-            return PolicySet.from_yaml("\n".join(yaml_lines))
-    except Exception as exc:
-        logger.warning("Could not load policies from AO Platform: %s", exc)
-        return None
-
 # ── App-specific state schema ────────────────────────────────────────
 
 class TaxEmailState(TypedDict):
@@ -303,16 +244,16 @@ _TIN_RE = re.compile(r'\bSG-T\d{3}-\d{4}\b', re.IGNORECASE)
 
 async def _db_lookup_taxpayer(sender_email: str, tin: str | None) -> dict | None:
     try:
-        async with await psycopg.AsyncConnection.connect(DATABASE_URL, row_factory=dict_row) as conn:
-            if tin:
-                cur = await conn.execute(
-                    "SELECT * FROM taxpayers WHERE tax_id = %s", (tin.upper(),)
-                )
-            else:
-                cur = await conn.execute(
+        def _query():
+            with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+                if tin:
+                    return conn.execute(
+                        "SELECT * FROM taxpayers WHERE tax_id = %s", (tin.upper(),)
+                    ).fetchone()
+                return conn.execute(
                     "SELECT * FROM taxpayers WHERE email = %s", (sender_email.lower(),)
-                )
-            return await cur.fetchone()
+                ).fetchone()
+        return await asyncio.to_thread(_query)
     except Exception as exc:
         logger.warning("Taxpayer DB lookup failed: %s", exc)
         return None
@@ -452,7 +393,7 @@ compiled_graph = executor.compile(state_schema=TaxEmailState)
 executor_sv.register_tool("lookup_taxpayer", _tool_lookup_taxpayer, _LOOKUP_TAXPAYER_SCHEMA)
 compiled_graph_sv = executor_sv.compile(state_schema=TaxEmailState)
 
-# ── HITL persistence helpers ──────────────────────────────────────────
+# ── HITL helpers ─────────────────────────────────────────────────────
 
 def _active_category(state: dict) -> str:
     """Return the routing category from either router ('route') or concurrent ('intents')."""
@@ -461,58 +402,23 @@ def _active_category(state: dict) -> str:
         return ", ".join(intents)
     return state.get("route", "")
 
-async def _persist_hitl_request(
-    email: dict,
-    final_state: dict,
-    trace_id: str,
-) -> str | None:
-    """Write an ao_hitl_request row to PostgreSQL when HITL is required.
-
-    Returns the new request_id on success, or None if the write fails.
-    The payload stores:
-    - proposed_action: text from the manifest's hitl_action field
-    - taxpayer: taxpayer record used for the decision
-    - draft_reply: the AI-generated reply awaiting approval
-    - action_webhook: URL the dashboard calls to execute after approval
-    """
-    request_id = str(uuid.uuid4())
+async def _persist_hitl_request(email: dict, final_state: dict, trace_id: str) -> str | None:
+    """Delegate HITL persistence to AppRuntime so no direct DB call lives here."""
     tp = final_state.get("taxpayer")
-    # Resolve {taxpayer_tax_id} placeholder in the hitl_action template
-    hitl_action_text = final_state.get("hitl_action", "Review decision")
-    if tp:
-        hitl_action_text = hitl_action_text.replace("{taxpayer_tax_id}", tp.get("tax_id", "?"))
-
-    payload = {
-        "email_id": email.get("id"),
-        "sender": email.get("from"),
-        "subject": email.get("subject"),
-        "proposed_action": hitl_action_text,
-        "draft_reply": final_state.get("output", ""),
-        "taxpayer_name": tp.get("full_name") if tp else None,
-        "taxpayer_tax_id": tp.get("tax_id") if tp else None,
-        "taxpayer_penalty_count": tp.get("penalty_count") if tp else None,
-        "trace_id": trace_id,
-        "action_webhook": f"http://localhost:8001/api/hitl/{request_id}/execute",
-    }
-    try:
-        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
-            await conn.execute(
-                """INSERT INTO ao_hitl_requests
-                   (request_id, workflow_id, step_name, status, payload)
-                   VALUES (%s, %s, %s, 'pending', %s)
-                   ON CONFLICT DO NOTHING""",
-                (
-                    request_id,
-                    "email-triage-v1",
-                    _active_category(final_state),
-                    json.dumps(payload),
-                ),
-            )
-        logger.info("HITL request persisted: %s (email %s)", request_id, email.get("id"))
-        return request_id
-    except Exception:
-        logger.warning("Failed to persist HITL request", exc_info=True)
-        return None
+    return await _runtime.maybe_persist_hitl(
+        item={
+            "id": email.get("id"),
+            "sender": email.get("from"),
+            "subject": email.get("subject"),
+            "draft_reply": final_state.get("output", ""),  # dashboard reads this key
+            "taxpayer_name": tp.get("full_name") if tp else None,
+            "taxpayer_tax_id": tp.get("tax_id") if tp else None,
+            "taxpayer_penalty_count": tp.get("penalty_count") if tp else None,
+        },
+        final_state=final_state,
+        trace_id=trace_id,
+        action_webhook_template="http://localhost:8001/api/hitl/{}/execute",
+    )
 
 # ── Sample taxpayer emails ──────────────────────────────────────────
 
@@ -760,8 +666,10 @@ async def lifespan(app: FastAPI):
     global policies, _redis_memory
     db_ok = False
     try:
-        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
-            await conn.execute("SELECT 1")
+        def _ping():
+            with psycopg.connect(DATABASE_URL) as conn:
+                conn.execute("SELECT 1")
+        await asyncio.to_thread(_ping)
         db_ok = True
     except Exception as exc:
         logger.warning("PostgreSQL unavailable: %s", exc)
@@ -1352,66 +1260,68 @@ async def execute_hitl_action(request_id: str, body: HITLResolve):
     """
     now = datetime.now(timezone.utc)
     try:
-        async with await psycopg.AsyncConnection.connect(DATABASE_URL, row_factory=dict_row) as conn:
-            # Fetch the request
-            cur = await conn.execute(
-                "SELECT * FROM ao_hitl_requests WHERE request_id = %s", (request_id,)
+        def _fetch_req():
+            with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+                return conn.execute(
+                    "SELECT * FROM ao_hitl_requests WHERE request_id = %s", (request_id,)
+                ).fetchone()
+
+        req = await asyncio.to_thread(_fetch_req)
+        if not req:
+            raise HTTPException(status_code=404, detail="HITL request not found")
+
+        status_val = "approved" if body.approved else "rejected"
+        payload = req["payload"] if isinstance(req["payload"], dict) else json.loads(req["payload"])
+        email_id = payload.get("email_id")
+        tax_id = payload.get("taxpayer_tax_id")
+        action_text = payload.get("proposed_action", "HITL action approved")
+        trace_id = payload.get("trace_id")
+
+        def _resolve_db():
+            note_text = (
+                f"[{now.strftime('%Y-%m-%d')}] Penalty waiver APPROVED by {body.reviewer}. "
+                f"Action: {action_text}"
             )
-            req = await cur.fetchone()
-            if not req:
-                raise HTTPException(status_code=404, detail="HITL request not found")
-
-            status = "approved" if body.approved else "rejected"
-
-            payload = req["payload"] if isinstance(req["payload"], dict) else json.loads(req["payload"])
-            email_id = payload.get("email_id")
-            tax_id = payload.get("taxpayer_tax_id")
-            action_text = payload.get("proposed_action", "HITL action approved")
-            trace_id = payload.get("trace_id")
-
-            if body.approved:
-                if tax_id:
-                    note_text = (
-                        f"[{now.strftime('%Y-%m-%d')}] Penalty waiver APPROVED by {body.reviewer}. "
-                        f"Action: {action_text}"
-                    )
-                    await conn.execute(
+            with psycopg.connect(DATABASE_URL) as conn:
+                if body.approved and tax_id:
+                    conn.execute(
                         "UPDATE taxpayers SET notes = notes || %s WHERE tax_id = %s",
                         (f"\n{note_text}", tax_id),
                     )
                     logger.info("HITL approved: updated taxpayer notes for %s", tax_id)
+                conn.execute(
+                    "UPDATE ao_hitl_requests "
+                    "SET status=%s, reviewer=%s, note=%s, resolved_at=%s "
+                    "WHERE request_id=%s",
+                    (status_val, body.reviewer, body.note, now, request_id),
+                )
+                conn.commit()
 
-            # Clear the HITL flag in memory so the banner disappears on next list refresh
-            if email_id and email_id in emails_db:
-                emails_db[email_id]["hitl_required"] = False
-                emails_db[email_id]["hitl_resolved"] = True
-                emails_db[email_id]["status"] = "hitl_approved" if body.approved else "hitl_rejected"
+        await asyncio.to_thread(_resolve_db)
 
-            # Append a resolution event to the originating Langfuse trace
-            if langfuse_client and trace_id:
-                try:
-                    lf_trace = langfuse_client.trace(id=trace_id)
-                    lf_trace.event(
-                        name=f"hitl_{status}",
-                        metadata={
-                            "reviewer": body.reviewer,
-                            "action": action_text,
-                            "tax_id": tax_id,
-                            "note": body.note,
-                            "resolved_at": now.isoformat(),
-                        },
-                    )
-                    langfuse_client.flush()
-                except Exception:
-                    pass
+        # Clear the HITL flag in memory so the banner disappears on next list refresh
+        if email_id and email_id in emails_db:
+            emails_db[email_id]["hitl_required"] = False
+            emails_db[email_id]["hitl_resolved"] = True
+            emails_db[email_id]["status"] = "hitl_approved" if body.approved else "hitl_rejected"
 
-            # Mark request resolved
-            await conn.execute(
-                "UPDATE ao_hitl_requests "
-                "SET status=%s, reviewer=%s, note=%s, resolved_at=%s "
-                "WHERE request_id=%s",
-                (status, body.reviewer, body.note, now, request_id),
-            )
+        # Append a resolution event to the originating Langfuse trace
+        if langfuse_client and trace_id:
+            try:
+                lf_trace = langfuse_client.trace(id=trace_id)
+                lf_trace.event(
+                    name=f"hitl_{status_val}",
+                    metadata={
+                        "reviewer": body.reviewer,
+                        "action": action_text,
+                        "tax_id": tax_id,
+                        "note": body.note,
+                        "resolved_at": now.isoformat(),
+                    },
+                )
+                langfuse_client.flush()
+            except Exception:
+                pass
 
     except HTTPException:
         raise
@@ -1419,7 +1329,7 @@ async def execute_hitl_action(request_id: str, body: HITLResolve):
         logger.warning("HITL execute failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
-    return {"status": status, "request_id": request_id, "executed": body.approved}
+    return {"status": status_val, "request_id": request_id, "executed": body.approved}
 
 @app.get("/healthz")
 async def healthz():
@@ -1428,10 +1338,10 @@ async def healthz():
 
     # Database ping
     try:
-        async with await psycopg.AsyncConnection.connect(
-            DATABASE_URL, connect_timeout=3
-        ) as conn:
-            await conn.execute("SELECT 1")
+        def _ping():
+            with psycopg.connect(DATABASE_URL, connect_timeout=3) as conn:
+                conn.execute("SELECT 1")
+        await asyncio.to_thread(_ping)
         checks["db"] = "ok"
     except Exception as exc:
         checks["db"] = f"error: {exc}"

@@ -2,8 +2,13 @@
 
 Stores persistent facts, user preferences, and embeddings that
 survive across sessions. Supports vector similarity search.
+
+Implementation note: all DB operations use the synchronous psycopg API
+wrapped in ``asyncio.to_thread()``, which makes them compatible with any
+event-loop implementation (including Windows' ProactorEventLoop).
 """
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -35,25 +40,25 @@ class LongTermMemory:
         self._conn_str = connection_string
         self._app_id = app_id
 
-    async def initialize(self) -> None:
-        """Create tables if they don't exist."""
-        async with await psycopg.AsyncConnection.connect(self._conn_str) as conn:
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-            await conn.execute(CREATE_TABLE_SQL)
-            await conn.commit()
+    # ── Synchronous implementations (run in thread pool) ─────────────
+
+    def _initialize(self) -> None:
+        with psycopg.connect(self._conn_str) as conn:
+            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            conn.execute(CREATE_TABLE_SQL)
+            conn.commit()
         logger.info("Long-term memory tables initialized for app=%s", self._app_id)
 
-    async def store(
+    def _store(
         self,
         key: str,
         value: Any,
-        namespace: str = "default",
-        embedding: list[float] | None = None,
+        namespace: str,
+        embedding: list[float] | None,
     ) -> None:
-        """Store or update a memory entry."""
-        async with await psycopg.AsyncConnection.connect(self._conn_str) as conn:
+        with psycopg.connect(self._conn_str) as conn:
             if embedding:
-                await conn.execute(
+                conn.execute(
                     """
                     INSERT INTO ao_long_term_memory (app_id, namespace, key, value, embedding, updated_at)
                     VALUES (%s, %s, %s, %s::jsonb, %s::vector, NOW())
@@ -63,7 +68,7 @@ class LongTermMemory:
                     (self._app_id, namespace, key, json.dumps(value), str(embedding)),
                 )
             else:
-                await conn.execute(
+                conn.execute(
                     """
                     INSERT INTO ao_long_term_memory (app_id, namespace, key, value, updated_at)
                     VALUES (%s, %s, %s, %s::jsonb, NOW())
@@ -72,27 +77,25 @@ class LongTermMemory:
                     """,
                     (self._app_id, namespace, key, json.dumps(value)),
                 )
-            await conn.commit()
+            conn.commit()
 
-    async def retrieve(self, key: str, namespace: str = "default") -> Any | None:
-        """Retrieve a memory entry by key."""
-        async with await psycopg.AsyncConnection.connect(self._conn_str) as conn:
-            cur = await conn.execute(
+    def _retrieve(self, key: str, namespace: str) -> Any | None:
+        with psycopg.connect(self._conn_str) as conn:
+            cur = conn.execute(
                 "SELECT value FROM ao_long_term_memory WHERE app_id = %s AND namespace = %s AND key = %s",
                 (self._app_id, namespace, key),
             )
-            row = await cur.fetchone()
+            row = cur.fetchone()
             return row[0] if row else None
 
-    async def search_similar(
+    def _search_similar(
         self,
         query_embedding: list[float],
-        namespace: str = "default",
-        top_k: int = 5,
+        namespace: str,
+        top_k: int,
     ) -> list[dict[str, Any]]:
-        """Find entries most similar to the query embedding via cosine distance."""
-        async with await psycopg.AsyncConnection.connect(self._conn_str) as conn:
-            cur = await conn.execute(
+        with psycopg.connect(self._conn_str) as conn:
+            cur = conn.execute(
                 """
                 SELECT key, value, 1 - (embedding <=> %s::vector) AS similarity
                 FROM ao_long_term_memory
@@ -102,14 +105,47 @@ class LongTermMemory:
                 """,
                 (str(query_embedding), self._app_id, namespace, str(query_embedding), top_k),
             )
-            rows = await cur.fetchall()
+            rows = cur.fetchall()
             return [{"key": r[0], "value": r[1], "similarity": r[2]} for r in rows]
 
-    async def delete(self, key: str, namespace: str = "default") -> None:
-        """Delete a memory entry."""
-        async with await psycopg.AsyncConnection.connect(self._conn_str) as conn:
-            await conn.execute(
+    def _delete(self, key: str, namespace: str) -> None:
+        with psycopg.connect(self._conn_str) as conn:
+            conn.execute(
                 "DELETE FROM ao_long_term_memory WHERE app_id = %s AND namespace = %s AND key = %s",
                 (self._app_id, namespace, key),
             )
-            await conn.commit()
+            conn.commit()
+
+    # ── Async public API ──────────────────────────────────────────────
+
+    async def initialize(self) -> None:
+        """Create tables if they don't exist."""
+        await asyncio.to_thread(self._initialize)
+
+    async def store(
+        self,
+        key: str,
+        value: Any,
+        namespace: str = "default",
+        embedding: list[float] | None = None,
+    ) -> None:
+        """Store or update a memory entry."""
+        await asyncio.to_thread(self._store, key, value, namespace, embedding)
+
+    async def retrieve(self, key: str, namespace: str = "default") -> Any | None:
+        """Retrieve a memory entry by key."""
+        return await asyncio.to_thread(self._retrieve, key, namespace)
+
+    async def search_similar(
+        self,
+        query_embedding: list[float],
+        namespace: str = "default",
+        top_k: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Find entries most similar to the query embedding via cosine distance."""
+        return await asyncio.to_thread(self._search_similar, query_embedding, namespace, top_k)
+
+    async def delete(self, key: str, namespace: str = "default") -> None:
+        """Delete a memory entry."""
+        await asyncio.to_thread(self._delete, key, namespace)
+

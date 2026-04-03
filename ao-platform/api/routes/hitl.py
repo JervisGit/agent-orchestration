@@ -1,6 +1,8 @@
 """HITL approval endpoints — PostgreSQL-backed with in-memory fallback."""
 
+import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -17,6 +19,47 @@ class ApprovalResolve(BaseModel):
     approved: bool
     reviewer: str = ""
     note: str = ""
+
+
+class HITLCreateRequest(BaseModel):
+    """Generic HITL request body — sent by AppRuntime.maybe_persist_hitl()."""
+    request_id: str = ""          # if empty, a UUID is generated server-side
+    workflow_id: str = ""
+    step_name: str = ""
+    payload: dict[str, Any] = {}  # app-specific data: sender, subject, draft_output, etc.
+
+
+@router.post("/requests")
+async def create_hitl_request(body: HITLCreateRequest, conn=Depends(get_db)):
+    """Create a new HITL approval request.
+
+    Called by ``AppRuntime.maybe_persist_hitl()`` in any AO-integrated app.
+    The ``payload`` is stored as JSONB and is app-specific — it can carry
+    email details, agenda summaries, taxpayer records, or anything else the
+    reviewing human needs to make a decision.
+    """
+    request_id = body.request_id or str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    if conn is None:
+        _pending[request_id] = {
+            "request_id": request_id,
+            "workflow_id": body.workflow_id,
+            "step_name": body.step_name,
+            "status": "pending",
+            "payload": body.payload,
+            "created_at": now,
+        }
+        return {"request_id": request_id, "status": "pending"}
+
+    await conn.execute(
+        "INSERT INTO ao_hitl_requests"
+        " (request_id, workflow_id, step_name, status, payload)"
+        " VALUES (%s, %s, %s, 'pending', %s::jsonb)"
+        " ON CONFLICT (request_id) DO NOTHING",
+        (request_id, body.workflow_id, body.step_name, __import__("json").dumps(body.payload)),
+    )
+    return {"request_id": request_id, "status": "pending"}
 
 
 @router.get("/pending")

@@ -68,6 +68,10 @@ class AgentConfig:
     #   3. Set identity_client_id here in ao-manifest.yaml
     # Leave empty (the default) to use the app's identity_mode and service_principal_id.
     identity_client_id: str | None = None
+    # Agent role within the workflow pattern.  Used by the supervisor pattern to
+    # identify which agent acts as the planner/orchestrator (role="supervisor").
+    # Ignored by all other patterns.
+    role: str | None = None
 
 
 @dataclass

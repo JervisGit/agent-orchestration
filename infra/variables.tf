@@ -86,6 +86,34 @@ variable "email_assistant_langfuse_secret_key" {
   description = "Langfuse secret key for the email-assistant project"
 }
 
+variable "rag_search_langfuse_public_key" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Langfuse public key for the rag-search project (optional — omit to disable tracing)"
+}
+
+variable "rag_search_langfuse_secret_key" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Langfuse secret key for the rag-search project"
+}
+
+variable "graph_compliance_langfuse_public_key" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Langfuse public key for the graph-compliance project (optional — omit to disable tracing)"
+}
+
+variable "graph_compliance_langfuse_secret_key" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Langfuse secret key for the graph-compliance project"
+}
+
 variable "enable_content_safety" {
   type        = bool
   default     = true

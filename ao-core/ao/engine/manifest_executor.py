@@ -463,11 +463,59 @@ class ManifestExecutor:
             return self._compile_concurrent(state_schema)
         if self._manifest.pattern == "supervisor":
             return self._compile_supervisor(state_schema)
+        if self._manifest.pattern == "linear":
+            return self._compile_linear(state_schema)
         raise NotImplementedError(
             f"Pattern '{self._manifest.pattern}' not yet supported by ManifestExecutor. "
-            "Supported: 'router', 'concurrent', 'supervisor'. "
-            "For 'linear', 'planner', register your graph via LangGraphEngine."
+            "Supported: 'router', 'concurrent', 'supervisor', 'linear'. "
+            "For 'planner', register your graph via LangGraphEngine."
         )
+
+    def _compile_linear(self, state_schema: type) -> Any:
+        """Build the linear pattern: [pre-steps] → agent1 → agent2 → … → agentN → END.
+
+        Agents are chained in the order they appear in the manifest's ``agents`` list.
+        Each agent can use tools; the output of each node is merged into graph state
+        and passed to the next agent via the ``_context`` convention so later agents
+        can build on earlier work.
+
+        This is the right pattern for:
+        - RAG search  (search_agent retrieves → synthesis_agent answers)
+        - Simple pipelines where every agent always runs
+        """
+        agents = self._manifest.agents
+        if not agents:
+            raise ValueError("Linear pattern requires at least one agent in the manifest.")
+
+        graph = StateGraph(state_schema)
+
+        # ── Pre-steps ──────────────────────────────────────────────
+        prev: str | None = None
+        for step_name, step_fn in self._pre_steps:
+            graph.add_node(step_name, step_fn)
+            if prev is None:
+                graph.set_entry_point(step_name)
+            else:
+                graph.add_edge(prev, step_name)
+            prev = step_name
+
+        # ── Agent chain ────────────────────────────────────────────
+        for cfg in agents:
+            graph.add_node(cfg.name, self._make_specialist_node(cfg, []))
+            if prev:
+                graph.add_edge(prev, cfg.name)
+            else:
+                graph.set_entry_point(cfg.name)
+            prev = cfg.name
+
+        graph.add_edge(prev, END)
+
+        self._compiled = graph.compile(checkpointer=self._checkpointer)
+        logger.info(
+            "ManifestExecutor compiled '%s' (linear pattern, %d agents, %d pre-steps)",
+            self._manifest.app_id, len(agents), len(self._pre_steps),
+        )
+        return self._compiled
 
     def _compile_router(self, state_schema: type) -> Any:
         """Build the router pattern: [pre-steps] → classify → specialist → END."""

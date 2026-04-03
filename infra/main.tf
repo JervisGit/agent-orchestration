@@ -134,6 +134,10 @@ module "aca" {
   langfuse_azure_ad_tenant_id          = var.langfuse_azure_ad_tenant_id
   email_assistant_langfuse_public_key  = var.email_assistant_langfuse_public_key
   email_assistant_langfuse_secret_key  = var.email_assistant_langfuse_secret_key
+  rag_search_langfuse_public_key       = var.rag_search_langfuse_public_key
+  rag_search_langfuse_secret_key       = var.rag_search_langfuse_secret_key
+  graph_compliance_langfuse_public_key = var.graph_compliance_langfuse_public_key
+  graph_compliance_langfuse_secret_key = var.graph_compliance_langfuse_secret_key
   servicebus_connection_string    = module.messaging.servicebus_connection_string
   redis_url                       = module.database.redis_connection_string
   apim_gateway_url                = try(module.apim[0].apim_gateway_url, "")
@@ -190,6 +194,14 @@ output "api_url" {
 
 output "email_assistant_url" {
   value = var.compute_platform == "aca" ? module.aca[0].email_assistant_url : "kubectl port-forward or ingress — see AKS deployment docs"
+}
+
+output "rag_search_url" {
+  value = var.compute_platform == "aca" ? module.aca[0].rag_search_url : "kubectl port-forward or ingress — see AKS deployment docs"
+}
+
+output "graph_compliance_url" {
+  value = var.compute_platform == "aca" ? module.aca[0].graph_compliance_url : "kubectl port-forward or ingress — see AKS deployment docs"
 }
 
 output "langfuse_url" {

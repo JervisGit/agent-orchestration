@@ -117,7 +117,11 @@ INSERT INTO ao_apps (app_id, display_name, description, pattern) VALUES
 ('rag_search',          'RAG Search',          'Retrieval-augmented search over company documents with pgvector embeddings.',       'linear'),
 ('graph_compliance',    'Graph Compliance',    'Multi-agent compliance checks using Microsoft Graph API with user-delegated identity.', 'supervisor')
 ON CONFLICT DO NOTHING;
-
+-- ── RAG Search: document knowledge base (pgvector) ──────────────────
+-- Requires the pgvector extension. The app calls LongTermMemory.initialize()
+-- at startup which creates this table — no need to duplicate the CREATE here.
+-- The extension itself must be pre-installed in the Postgres image.
+CREATE EXTENSION IF NOT EXISTS vector;
 -- ── Seed: default workflows for the AO Dashboard ──────────────
 INSERT INTO ao_workflows (workflow_id, app_id, pattern, description) VALUES
 ('email-triage-v1',    'tax_email_assistant','router',    'Routes taxpayer emails to specialist agents by inquiry category'),

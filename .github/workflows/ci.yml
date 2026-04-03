@@ -136,6 +136,14 @@ jobs:
         run: |
           docker build -f docker/Dockerfile.email-assistant -t ${{ env.REGISTRY }}/email-assistant:${{ github.sha }} .
           docker push ${{ env.REGISTRY }}/email-assistant:${{ github.sha }}
+      - name: Build and push rag-search
+        run: |
+          docker build -f docker/Dockerfile.rag-search -t ${{ env.REGISTRY }}/rag-search:${{ github.sha }} .
+          docker push ${{ env.REGISTRY }}/rag-search:${{ github.sha }}
+      - name: Build and push graph-compliance
+        run: |
+          docker build -f docker/Dockerfile.graph-compliance -t ${{ env.REGISTRY }}/graph-compliance:${{ github.sha }} .
+          docker push ${{ env.REGISTRY }}/graph-compliance:${{ github.sha }}
 
   # ── Deploy to Dev ────────────────────────────────────────────────
   deploy-dev:
@@ -170,6 +178,14 @@ jobs:
             --name ca-email-assistant-dev \
             --resource-group rg-ao-dev \
             --image ${{ env.REGISTRY }}/email-assistant:${{ github.sha }}
+          az containerapp update \
+            --name ca-rag-search-dev \
+            --resource-group rg-ao-dev \
+            --image ${{ env.REGISTRY }}/rag-search:${{ github.sha }}
+          az containerapp update \
+            --name ca-graph-compliance-dev \
+            --resource-group rg-ao-dev \
+            --image ${{ env.REGISTRY }}/graph-compliance:${{ github.sha }}
 
       # ── AKS deploy path ──
       - name: Deploy to AKS

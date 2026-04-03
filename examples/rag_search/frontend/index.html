@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG Search — Internal Knowledge Base</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f3f2f1; color: #323130; min-height: 100vh; }
+  header { background: #0078d4; color: #fff; padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 20px; font-weight: 600; }
+  header span { font-size: 13px; opacity: .8; }
+  .container { max-width: 860px; margin: 0 auto; padding: 32px 24px; }
+  .search-box { background: #fff; border-radius: 4px; box-shadow: 0 1.6px 3.6px rgba(0,0,0,.13); padding: 24px; margin-bottom: 24px; }
+  .search-row { display: flex; gap: 10px; }
+  input[type=text] { flex: 1; border: 1px solid #8a8886; border-radius: 2px; padding: 8px 12px; font-size: 15px; outline: none; }
+  input[type=text]:focus { border-color: #0078d4; }
+  button.primary { background: #0078d4; color: #fff; border: none; border-radius: 2px; padding: 8px 20px; font-size: 14px; cursor: pointer; font-weight: 600; }
+  button.primary:disabled { background: #a19f9d; cursor: not-allowed; }
+  button.primary:hover:not(:disabled) { background: #106ebe; }
+  .hint { margin-top: 10px; font-size: 12px; color: #605e5c; }
+
+  .card { background: #fff; border-radius: 4px; box-shadow: 0 1.6px 3.6px rgba(0,0,0,.13); padding: 24px; margin-bottom: 16px; }
+  .card h3 { font-size: 14px; font-weight: 600; color: #605e5c; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
+
+  .steps { display: flex; flex-direction: column; gap: 6px; }
+  .step { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: #faf9f8; border-left: 3px solid #0078d4; font-size: 13px; border-radius: 0 2px 2px 0; }
+  .step.tool { border-color: #8764b8; }
+  .step-dot { width: 8px; height: 8px; border-radius: 50%; background: #0078d4; flex-shrink: 0; }
+  .step.tool .step-dot { background: #8764b8; }
+
+  .answer-box { background: #fff; border-radius: 4px; box-shadow: 0 1.6px 3.6px rgba(0,0,0,.13); padding: 24px; margin-bottom: 16px; }
+  .answer-box h3 { font-size: 14px; font-weight: 600; color: #605e5c; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
+  .answer-text { font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
+  .cursor { display: inline-block; width: 2px; height: 1em; background: #0078d4; animation: blink 0.8s steps(1) infinite; vertical-align: text-bottom; margin-left: 1px; }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+  .sources { margin-top: 16px; }
+  .sources h4 { font-size: 13px; font-weight: 600; color: #605e5c; margin-bottom: 8px; text-transform: uppercase; letter-spacing: .5px; }
+  .source-tag { display: inline-block; background: #e1dfdd; border-radius: 2px; padding: 3px 8px; font-size: 12px; margin: 2px 4px 2px 0; }
+  .source-tag .sim { color: #0078d4; font-weight: 600; }
+
+  .error-box { background: #fde7e9; border-left: 4px solid #d13438; padding: 12px 16px; border-radius: 2px; font-size: 14px; color: #a4262c; margin-bottom: 16px; }
+
+  .ingest-section { margin-top: 32px; }
+  .ingest-section h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+  .ingest-form { background: #fff; border-radius: 4px; box-shadow: 0 1.6px 3.6px rgba(0,0,0,.13); padding: 20px; }
+  .ingest-form label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #605e5c; }
+  .ingest-form input, .ingest-form textarea { width: 100%; border: 1px solid #8a8886; border-radius: 2px; padding: 7px 10px; font-size: 14px; font-family: inherit; margin-bottom: 12px; outline: none; resize: vertical; }
+  .ingest-form input:focus, .ingest-form textarea:focus { border-color: #0078d4; }
+  .ingest-success { color: #107c10; font-size: 13px; margin-top: 6px; }
+
+  .trace-link { font-size: 12px; color: #0078d4; text-decoration: none; margin-top: 8px; display: inline-block; }
+  .trace-link:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<header>
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="11" r="7" stroke="white" stroke-width="2"/><line x1="16.5" y1="16.5" x2="22" y2="22" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>
+  <h1>Internal Knowledge Search</h1>
+  <span>Powered by AO — RAG (retrieval-augmented generation)</span>
+</header>
+
+<div class="container">
+  <div class="search-box">
+    <div class="search-row">
+      <input type="text" id="query" placeholder="Ask a question about company policies…" autofocus>
+      <button class="primary" id="searchBtn" onclick="doSearch()">Search</button>
+    </div>
+    <div class="hint">Try: "How many days of annual leave do I get?" or "What is the procurement approval limit?"</div>
+  </div>
+
+  <div id="error" class="error-box" style="display:none;"></div>
+
+  <div id="stepsCard" class="card" style="display:none;">
+    <h3>Agent Workflow</h3>
+    <div class="steps" id="steps"></div>
+  </div>
+
+  <div id="answerBox" class="answer-box" style="display:none;">
+    <h3>Answer</h3>
+    <div class="answer-text" id="answerText"></div>
+    <div class="sources" id="sourcesBox" style="display:none;">
+      <h4>Sources Retrieved</h4>
+      <div id="sourceTags"></div>
+    </div>
+    <a id="traceLink" class="trace-link" href="#" target="_blank" style="display:none;">View trace in Langfuse</a>
+  </div>
+
+  <div class="ingest-section">
+    <h2>Add a Document to the Knowledge Base</h2>
+    <div class="ingest-form">
+      <label for="docTitle">Document Title</label>
+      <input type="text" id="docTitle" placeholder="e.g. Leave Cancellation Policy">
+      <label for="docContent">Document Content</label>
+      <textarea id="docContent" rows="5" placeholder="Paste the policy text here…"></textarea>
+      <button class="primary" onclick="ingestDoc()">Ingest Document</button>
+      <div class="ingest-success" id="ingestMsg" style="display:none;"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let currentES = null;
+
+document.getElementById('query').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doSearch();
+});
+
+function doSearch() {
+  const q = document.getElementById('query').value.trim();
+  if (!q) return;
+  if (currentES) currentES.close();
+
+  document.getElementById('error').style.display = 'none';
+  document.getElementById('stepsCard').style.display = 'none';
+  document.getElementById('answerBox').style.display = 'none';
+  document.getElementById('steps').innerHTML = '';
+  document.getElementById('answerText').innerHTML = '';
+  document.getElementById('sourcesBox').style.display = 'none';
+  document.getElementById('traceLink').style.display = 'none';
+  document.getElementById('searchBtn').disabled = true;
+
+  let answerBuf = '';
+  let streaming = false;
+
+  const es = new EventSource(`${API}/api/search/stream?q=${encodeURIComponent(q)}`);
+  currentES = es;
+
+  es.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'start') {
+      document.getElementById('stepsCard').style.display = '';
+    }
+
+    if (msg.type === 'step') {
+      const steps = document.getElementById('steps');
+      const div = document.createElement('div');
+      div.className = 'step' + (msg.node.startsWith('tool:') ? ' tool' : '');
+      div.innerHTML = `<div class="step-dot"></div><span>${msg.label || msg.node}</span>`;
+      steps.appendChild(div);
+    }
+
+    if (msg.type === 'token') {
+      if (!streaming) {
+        document.getElementById('answerBox').style.display = '';
+        streaming = true;
+      }
+      answerBuf += msg.token;
+      const box = document.getElementById('answerText');
+      box.innerHTML = escapeHtml(answerBuf) + '<span class="cursor"></span>';
+    }
+
+    if (msg.type === 'complete') {
+      document.getElementById('answerBox').style.display = '';
+      const box = document.getElementById('answerText');
+      box.textContent = msg.result.answer;
+
+      const sources = (msg.result.sources || []).filter(s => s.title);
+      if (sources.length) {
+        document.getElementById('sourcesBox').style.display = '';
+        document.getElementById('sourceTags').innerHTML = sources.map(s =>
+          `<span class="source-tag">${escapeHtml(s.title)}${s.similarity ? ` <span class="sim">${Math.round(s.similarity*100)}%</span>` : ''}</span>`
+        ).join('');
+      }
+
+      if (msg.result.trace_id) {
+        const lf = `http://localhost:3000/traces/${msg.result.trace_id}`;
+        const a = document.getElementById('traceLink');
+        a.href = lf;
+        a.textContent = `View trace in Langfuse (${msg.result.trace_id.slice(0, 8)}…)`;
+        a.style.display = '';
+      }
+      document.getElementById('searchBtn').disabled = false;
+      es.close();
+    }
+
+    if (msg.type === 'error') {
+      document.getElementById('error').textContent = msg.message;
+      document.getElementById('error').style.display = '';
+      document.getElementById('searchBtn').disabled = false;
+      es.close();
+    }
+  };
+
+  es.onerror = () => {
+    document.getElementById('searchBtn').disabled = false;
+    es.close();
+  };
+}
+
+async function ingestDoc() {
+  const title = document.getElementById('docTitle').value.trim();
+  const content = document.getElementById('docContent').value.trim();
+  if (!title || !content) { alert('Please fill in both title and content.'); return; }
+  const resp = await fetch(`${API}/api/documents`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({title, content}),
+  });
+  const data = await resp.json();
+  const msg = document.getElementById('ingestMsg');
+  msg.textContent = data.embedded
+    ? `Ingested "${title}" with embeddings.`
+    : `Ingested "${title}" (no embedding — keyword fallback).`;
+  msg.style.display = '';
+  document.getElementById('docTitle').value = '';
+  document.getElementById('docContent').value = '';
+  setTimeout(() => msg.style.display = 'none', 4000);
+}
+
+function escapeHtml(t) {
+  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>

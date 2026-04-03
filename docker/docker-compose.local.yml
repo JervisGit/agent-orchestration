@@ -62,5 +62,38 @@ services:
       - langfuse
       - redis
 
+  rag-search:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.rag-search
+    ports:
+      - "8002:8002"
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql://ao:localdev@postgres:5432/ao
+      LANGFUSE_HOST: http://langfuse:3000
+      AO_PLATFORM_URL: http://ao-api:8000
+    depends_on:
+      - postgres
+      - langfuse
+      - ao-api
+
+  graph-compliance:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.graph-compliance
+    ports:
+      - "8003:8003"
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql://ao:localdev@postgres:5432/ao
+      LANGFUSE_HOST: http://langfuse:3000
+      AO_PLATFORM_URL: http://ao-api:8000
+    depends_on:
+      - langfuse
+      - ao-api
+
 volumes:
   pgdata:

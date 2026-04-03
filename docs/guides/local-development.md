@@ -149,7 +149,65 @@ To approve a HITL request raised by em-006, go to the **AO Platform Dashboard** 
 
 ---
 
-## 7. Run Tests
+## 7. Run the RAG Search App (port 8002)
+
+Open a third terminal:
+
+```powershell
+.venv\Scripts\python -m uvicorn backend.app:app --reload --port 8002 --app-dir examples/rag_search
+```
+
+Verify:
+```powershell
+curl http://localhost:8002/healthz
+# → {"status":"ok","checks":{"db":"ok","llm":"ok"}}
+```
+
+Then open **`http://localhost:8002`** in a browser.
+
+On first start the app auto-ingests 6 sample policy documents (Remote Work, Annual Leave, IT Security, Travel & Expense, Performance Review, Procurement) into pgvector.
+
+Available endpoints:
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/search/stream?q=...` | SSE streaming answer with source citations |
+| POST | `/api/search` | Batch search, returns JSON |
+| POST | `/api/documents` | Ingest a new document `{"title":"...","content":"..."}` |
+| GET | `/api/documents` | List all ingested documents |
+
+---
+
+## 8. Run the Graph Compliance App (port 8003)
+
+Open a fourth terminal:
+
+```powershell
+.venv\Scripts\python -m uvicorn backend.app:app --reload --port 8003 --app-dir examples/graph_compliance
+```
+
+Verify:
+```powershell
+curl http://localhost:8003/healthz
+# → {"status":"ok","checks":{"graph":"ok","llm":"ok"}}
+```
+
+Then open **`http://localhost:8003`** in a browser.
+
+The app ships with a synthetic 15-entity NetworkX graph (companies, persons, accounts with circular ownership, PEP links, and shared directorships) for demo purposes.
+
+Available endpoints:
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/investigate/stream?q=...` | SSE streaming investigation with reasoning accordion |
+| POST | `/api/investigate` | Batch investigation, returns JSON |
+| GET | `/api/graph/entities` | List all entities in the graph |
+| GET | `/api/graph/stats` | Node/edge counts and risk summary |
+
+---
+
+## 9. Run Tests
 
 ```powershell
 # All tests
@@ -167,7 +225,7 @@ deepeval test run tests/eval/
 
 ---
 
-## 8. Run Demo Scripts (optional)
+## 10. Run Demo Scripts (optional)
 
 These are standalone scripts that exercise the AO SDK without the FastAPI server:
 
@@ -183,7 +241,7 @@ python examples/email_assistant/backend/demo_phase3.py    # Advanced patterns
 
 ---
 
-## 9. Run with Docker Compose (all services)
+## 11. Run with Docker Compose (all services)
 
 To run the full stack including the Python apps in containers (mirrors production):
 

@@ -1,11 +1,16 @@
-# Graph Compliance (Neo4j) — AO App Manifest
+# Graph Compliance — AO App Manifest
+# Uses NetworkX in-memory graph for local dev/testing.
+# In production, swap the tool implementations for neo4j_query + Cypher
+# without touching this manifest or the agents — only the tool callables change.
 
 app_id: graph_compliance
 display_name: Graph Compliance
-description: Compliance investigation tool for internal officers using Neo4j knowledge graph
+description: Compliance investigation tool — explores entity relationships to detect risk
 
-# Identity — user-delegated because internal compliance officers
-# need audit trail of who queried what.
+# Supervisor: compliance_planner decides investigation steps, graph_investigator executes
+pattern: supervisor
+
+# Identity — user-delegated for audit trail (relaxed to service for local dev)
 identity_mode: user_delegated
 service_principal_id: ${GRAPH_COMPLIANCE_SP_CLIENT_ID}
 
@@ -16,43 +21,59 @@ langfuse_project: graph-compliance
 
 agents:
   - name: compliance_planner
+    role: supervisor
     system_prompt: |
-      You are a compliance investigation planner. Given a compliance query,
-      break it down into investigation steps: which entities to look up,
-      which relationships to traverse, and what risk indicators to check.
+      You are a compliance investigation planner and orchestrator.
+      Given a compliance query about an entity (company or person), break it down into
+      investigation steps and delegate to the graph_investigator specialist.
+
+      At each step you MUST decide what the investigator should look at next based on
+      what has already been found.  When you have enough information to give a complete
+      answer, output FINISH.
+
+      Always reason step-by-step. State what you found and what the next logical step is.
     model: gpt-4o
     tools: []
     temperature: 0.0
+    show_reasoning: true
 
   - name: graph_investigator
     system_prompt: |
-      You are a graph database investigator. Execute Cypher queries against
-      the Neo4j compliance graph to find entities, relationships, and patterns.
-      Always explain your findings clearly.
+      You are a graph database investigator. Use the available tools to explore the
+      compliance knowledge graph and surface relationships, risk indicators, and patterns.
+
+      Available tools:
+      - find_entity(name): Look up an entity (company or person) by name
+      - get_neighbors(entity_id, relationship_type): Get direct relationships
+      - find_path(from_entity_id, to_entity_id): Find connection path between two entities
+      - get_risk_indicators(entity_id): Get all risk flags for an entity
+
+      Always call at least one tool before drawing conclusions.
+      Summarise your findings clearly, noting risk level (LOW / MEDIUM / HIGH).
     model: gpt-4o
     tools:
-      - neo4j_query
-      - internal_system_api
+      - find_entity
+      - get_neighbors
+      - find_path
+      - get_risk_indicators
     temperature: 0.0
 
 tools:
-  - name: neo4j_query
-    type: database
-    description: Execute Cypher queries against the Neo4j compliance graph
-    endpoint: ${NEO4J_URI}
-    connection_secret: neo4j-credentials
-    identity_mode: user_delegated
-    params:
-      database: compliance
-      read_only: true  # Safety: agents cannot mutate the graph
-
-  - name: internal_system_api
-    type: api
-    description: Query internal regulatory system via REST API
-    endpoint: ${INTERNAL_SYSTEM_API_URL}
-    connection_secret: internal-system-api-key
-    params:
-      timeout_seconds: 30
+  # ADR-015: NetworkX used locally; in production replace with Neo4j Cypher queries.
+  # The tool interface (find_entity, get_neighbors, find_path, get_risk_indicators)
+  # stays the same regardless — agents are completely decoupled from the backend.
+  - name: find_entity
+    type: custom
+    description: Look up an entity in the compliance graph by name (partial match)
+  - name: get_neighbors
+    type: custom
+    description: Get all direct relationships for an entity
+  - name: find_path
+    type: custom
+    description: Find the shortest connection path between two entities
+  - name: get_risk_indicators
+    type: custom
+    description: Get all risk flags and scores for an entity
 
 policies:
   - name: pii_filter
@@ -60,6 +81,7 @@ policies:
     action: redact
   - name: content_safety
     stage: pre_execution
+    action: block
     action: block
   - name: token_budget
     stage: runtime

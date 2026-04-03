@@ -4,8 +4,10 @@ app_id: rag_search
 display_name: RAG Search
 description: Internal knowledge search powered by retrieval-augmented generation
 
-# Identity — user-delegated because internal staff are searching,
-# results should be scoped to what the user has access to.
+# Workflow: input → search_agent (retrieves + synthesises) → END
+pattern: linear
+
+# Identity — user-delegated in production; service for local dev
 identity_mode: user_delegated
 service_principal_id: ${RAG_SEARCH_SP_CLIENT_ID}
 
@@ -17,41 +19,32 @@ langfuse_project: rag-search
 agents:
   - name: search_agent
     system_prompt: |
-      You are a search assistant. Given a user query, search the knowledge base
-      and synthesize a clear answer with citations. If you cannot find relevant
-      information, say so honestly.
+      You are a search assistant for an internal knowledge base.
+      A user has asked a question. You have access to the 'vector_search' tool
+      which searches the document index. Use it to find relevant content, then
+      synthesise a clear, concise answer grounded in those results.
+      Always cite the source document titles in your answer (e.g. [1], [2]).
+      If you cannot find relevant information, say so honestly — do not invent facts.
     model: gpt-4o
     tools:
       - vector_search
-      - analytics_query
     temperature: 0.1
 
 tools:
+  # Production: Azure AI Search endpoint (injected by Terraform)
+  # Local dev: pgvector implementation registered in app.py overrides this
   - name: vector_search
     type: search_index
     description: Vector search over internal document index
-    endpoint: ${AI_SEARCH_ENDPOINT}
-    connection_secret: ai-search-api-key
     params:
-      index_name: internal-docs
-      top_k: 10
-
-  - name: analytics_query
-    type: adls
-    description: Query analytics tables in Azure Synapse (Delta tables in ADLS)
-    endpoint: ${SYNAPSE_ENDPOINT}
-    connection_secret: synapse-connection-string
-    identity_mode: user_delegated  # Pass user identity to Synapse for row-level security
-    params:
-      database: analytics
-      allowed_tables:
-        - sales_summary
-        - customer_metrics
+      top_k: 5
 
 policies:
   - name: pii_filter
     stage: post_execution
     action: redact
-  - name: token_budget
+  - name: content_safety
+    stage: pre_execution
+    action: block
     stage: runtime
     max_tokens_per_run: 50000
