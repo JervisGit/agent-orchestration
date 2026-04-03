@@ -208,65 +208,151 @@ class RAGState(TypedDict):
 
 SAMPLE_DOCS = [
     {
-        "title": "Remote Work Policy",
+        "title": "Singapore Income Tax Act — Key Provisions",
         "content": (
-            "Employees may work remotely up to 3 days per week with manager approval. "
-            "Core working hours are 10:00–16:00 SGT. All remote workers must use a VPN "
-            "and ensure their home workspace meets security requirements. Expenses for "
-            "home office equipment up to SGD 500 per year are reimbursable upon submission "
-            "of receipts. Extended remote arrangements (>3 months) require HR approval."
+            "Singapore taxes income on a territorial basis. Residents and companies are taxed "
+            "only on income accrued in or derived from Singapore, and on foreign-sourced income "
+            "remitted into Singapore (with exemptions for qualifying foreign dividend, branch "
+            "profit, and service income). Tax residency for individuals: a person is resident "
+            "if physically present or employed in Singapore for 183 days or more in a year. "
+            "Chargeable income = gross income minus allowable deductions and reliefs. "
+            "Companies incorporated in Singapore are generally treated as tax residents. "
+            "The Year of Assessment (YA) corresponds to income earned in the preceding calendar "
+            "year. IRAS (Inland Revenue Authority of Singapore) administers income tax under "
+            "the Income Tax Act (Cap. 134). Key exemptions include: gains from disposal of "
+            "ordinary shares (not taxable as capital gains); certain overseas income under "
+            "Section 13(8); start-up tax exemption for first three YAs."
         ),
     },
     {
-        "title": "Annual Leave Policy",
+        "title": "Singapore Corporate Tax Rate and Exemptions",
         "content": (
-            "Full-time employees receive 18 days of annual leave per year, accruing from "
-            "the first day of employment. Leave must be applied for at least 3 working days "
-            "in advance via the HR system. Unused leave of up to 10 days may be carried "
-            "forward to the next calendar year. Leave balance is pro-rated for partial-year "
-            "employees. Public holidays are separate from annual leave."
+            "The headline corporate tax rate in Singapore is 17% (flat rate). "
+            "Start-up Tax Exemption (SUTE): For the first three YAs, qualifying new companies "
+            "get 75% exemption on the first SGD 100,000 of chargeable income and 50% exemption "
+            "on the next SGD 100,000. Investment holding companies and property development "
+            "companies do not qualify. "
+            "Partial Tax Exemption (PTE): For all other companies, 75% exemption on the first "
+            "SGD 10,000 of chargeable income and 50% exemption on the next SGD 190,000. "
+            "Effective from YA 2020, the PTE cap rose so companies pay 17% only on income "
+            "above SGD 200,000 after partial exemption. "
+            "Tax rebates may be granted ad-hoc by the government (e.g. COVID-19 rebates). "
+            "Withholding tax applies to certain payments to non-residents: 10% on royalties, "
+            "15% on interest, 17% on technical service fees."
         ),
     },
     {
-        "title": "IT Security Policy",
+        "title": "Singapore GST Registration and Compliance",
         "content": (
-            "All staff must use multi-factor authentication (MFA) for corporate systems. "
-            "Passwords must be at least 14 characters and rotated every 90 days. "
-            "Personal devices may not store corporate data unless enrolled in MDM. "
-            "Suspicious emails should be reported to security@company.sg. "
-            "Data classified SECRET or above must not be stored on cloud storage without "
-            "encryption. Security incidents must be reported within 1 hour of discovery."
+            "Goods and Services Tax (GST) is a consumption tax levied on the supply of goods "
+            "and services in Singapore and on the import of goods. The GST rate is 9% effective "
+            "1 January 2024 (increased from 8%). "
+            "Mandatory registration: businesses must register for GST when taxable turnover "
+            "exceeds SGD 1 million in a 12-month period (retrospective basis) or is expected "
+            "to exceed SGD 1 million in the next 12 months (prospective basis). "
+            "Voluntary registration is allowed for businesses below the threshold. "
+            "GST-registered businesses charge GST on standard-rated supplies, claim input tax "
+            "credits on business purchases, and file GST returns quarterly (or monthly for some). "
+            "Zero-rated supplies (0% GST): exported goods, international services. "
+            "Exempt supplies: sale/lease of residential properties, financial services. "
+            "Late registration penalties: SGD 200 per year plus 10% of tax unpaid. "
+            "GST returns must be filed within 1 month after end of each accounting period."
         ),
     },
     {
-        "title": "Travel and Expense Policy",
+        "title": "Singapore Individual Income Tax Rates and Reliefs",
         "content": (
-            "Business travel requires pre-approval from the department head. Economy class "
-            "is mandated for flights under 6 hours; business class requires VP approval. "
-            "Hotel accommodation is capped at SGD 250/night in Singapore and SGD 300/night "
-            "overseas. All expenses must be submitted within 30 days via the expense portal "
-            "with original receipts. Meals are reimbursed at cost up to SGD 60/day."
+            "Singapore resident individuals are taxed at progressive rates. YA 2024 onwards: "
+            "0% on first SGD 20,000; 2% on next SGD 10,000; 3.5% on next SGD 10,000; "
+            "7% on next SGD 40,000; 11.5% on next SGD 40,000; 15% on next SGD 40,000; "
+            "18% on next SGD 40,000; 19% on next SGD 40,000; 19.5% on next SGD 40,000; "
+            "20% on next SGD 40,000; 22% on income above SGD 320,000. "
+            "Non-resident individuals are taxed at 24% (employment income) or 22% (director fees). "
+            "Common reliefs: CPF relief (up to SGD 16,000 for employee; SGD 37,740 for self-employed); "
+            "Earned Income Relief (SGD 1,000 up to SGD 8,000 for those 60+); "
+            "Spouse Relief (SGD 2,000); Child Relief (SGD 4,000 per qualifying child); "
+            "Course fees relief (up to SGD 5,500); NSman relief; "
+            "SRS contributions (up to SGD 15,300 for citizens/PRs, SGD 35,700 for foreigners). "
+            "Total personal reliefs are capped at SGD 80,000 per YA."
         ),
     },
     {
-        "title": "Performance Review Process",
+        "title": "Singapore Property Tax Rates and Assessment",
         "content": (
-            "Formal performance reviews are conducted twice yearly in June and December. "
-            "Reviews consist of a self-assessment, manager assessment, and a calibration "
-            "discussion. Ratings are: Exceptional, Exceeds Expectations, Meets Expectations, "
-            "Needs Improvement. Salary adjustments are linked to the December review. "
-            "Employees who receive Needs Improvement must complete a Performance Improvement "
-            "Plan (PIP) with clear milestones within 30 days."
+            "Property tax is levied annually on all properties in Singapore. "
+            "Owner-occupied residential properties (YA 2024): 0% on first SGD 8,000 AV; "
+            "4% on next SGD 47,000; 6% on next SGD 5,000; 10% on next SGD 10,000; "
+            "14% on next SGD 15,000; 20% above SGD 85,000 Annual Value (AV). "
+            "Non-owner-occupied residential properties: 12% on first SGD 30,000 AV; "
+            "20% on next SGD 15,000; progressive rates up to 36% above SGD 90,000 AV. "
+            "Commercial and industrial properties: flat 10% on AV. "
+            "Annual Value (AV) = estimated gross annual rent if the property were rented out, "
+            "determined by IRAS based on market rental data. "
+            "Additional Buyer's Stamp Duty (ABSD): Singaporeans buying 2nd residential property "
+            "pay 20% ABSD (from Apr 2023); PRs buying 1st property pay 5%; foreigners pay 60%. "
+            "Seller's Stamp Duty (SSD): properties sold within 3 years of purchase attract "
+            "SSD at 12% (within 1 year), 8% (within 2 years), 4% (within 3 years)."
         ),
     },
     {
-        "title": "Procurement Policy",
+        "title": "Singapore Tax Filing Deadlines, Penalties, and Waivers",
         "content": (
-            "Purchases under SGD 5,000 may be approved at department level. "
-            "Purchases between SGD 5,000 and SGD 50,000 require Finance approval. "
-            "Purchases above SGD 50,000 require three competitive quotes and Board approval. "
-            "All vendors must be registered in the approved vendor list before purchase orders "
-            "can be raised. Preferred payment terms are NET-30 for local vendors."
+            "Individual income tax: Form B1 (residents) or Form B (self-employed) due by "
+            "15 April each year; e-filing deadline is 18 April. "
+            "Corporate income tax: Estimated Chargeable Income (ECI) must be filed within "
+            "3 months from the company's financial year end. Form C-S (Lite) for companies "
+            "with revenue ≤ SGD 200,000; Form C-S for revenue ≤ SGD 5 million; Form C otherwise. "
+            "Corporate tax filing deadline is 30 November for the relevant YA. "
+            "Late filing penalties: IRAS may issue a Summons and impose a fine of up to SGD 1,000 "
+            "and a composition amount. Interest on late payment: 5% per annum on outstanding tax. "
+            "Penalty for omission or under-reporting: 200% of tax undercharged. "
+            "Penalty for tax evasion: up to 400% of tax evaded plus criminal prosecution. "
+            "Waiver considerations: IRAS may waive penalties for first-time offenders, genuine "
+            "mistakes, voluntary disclosure, or during extenuating circumstances. "
+            "Voluntary Disclosure Programme (VDP): penalties reduced if taxpayer proactively "
+            "discloses errors before IRAS initiates an audit."
+        ),
+    },
+    {
+        "title": "Singapore Capital Gains vs. Income Distinction",
+        "content": (
+            "Singapore does not have a capital gains tax. However, gains that are revenue "
+            "in nature (i.e. from trading activities) are taxable as income. "
+            "The distinction between capital gain and income gain depends on the 'badges of trade': "
+            "subject matter of transaction (assets normally held as investments tend to be capital); "
+            "frequency of transactions; supplementary work done before sale; "
+            "reason for acquisition; length of ownership. "
+            "Shares: Gains on disposal of shares are generally capital and not taxable. "
+            "However, professionals who trade shares as a business (e.g. trading companies) "
+            "are taxed on the gains. IRAS looks at whether the primary purpose was investment "
+            "or trading. "
+            "Property: Gains from property disposal may be capital or income. Developers are "
+            "taxed on profits. Individuals who flip properties frequently may be assessed as traders. "
+            "Cryptocurrency: IRAS treats gains from disposal of digital tokens as revenue if "
+            "the taxpayer is in the business of trading tokens. "
+            "Key cases: the IRAS e-Tax Guide 'Income Tax Treatment of Digital Tokens' (2020) "
+            "sets out the framework for token taxation."
+        ),
+    },
+    {
+        "title": "Singapore Transfer Pricing Rules and Documentation",
+        "content": (
+            "Singapore's transfer pricing rules require related-party transactions to be "
+            "conducted at arm's length, consistent with the OECD Transfer Pricing Guidelines. "
+            "Legislation: Section 34D of the Income Tax Act (enforceable from YA 2019). "
+            "IRAS may make adjustments if the actual price differs from the arm's length price, "
+            "potentially increasing the taxpayer's income or reducing deductions. "
+            "Documentation requirements: taxpayers with related-party transactions exceeding "
+            "SGD 15 million per type must maintain contemporaneous transfer pricing documentation. "
+            "Documentation includes a Group Master File and a Local File. "
+            "Deadline: documentation must be completed by the corporate tax filing due date and "
+            "made available to IRAS within 30 days of request. "
+            "Advance Pricing Arrangement (APA): taxpayers may apply to IRAS for a unilateral, "
+            "bilateral, or multilateral APA to provide certainty on transfer pricing methodology. "
+            "Surcharge for non-compliance: additional tax of 5% of the adjustment amount "
+            "if documentation requirements are not met. "
+            "Country-by-Country Reporting (CbCR): applies to MNC groups with consolidated "
+            "group revenue of SGD 1.125 billion or more."
         ),
     },
 ]

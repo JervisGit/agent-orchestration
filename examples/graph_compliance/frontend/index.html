@@ -4,14 +4,39 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Graph Compliance Investigation</title>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f3f2f1; color: #323130; min-height: 100vh; }
   header { background: #0078d4; color: #fff; padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
   header h1 { font-size: 20px; font-weight: 600; }
   header span { font-size: 13px; opacity: .8; }
-  .container { max-width: 960px; margin: 0 auto; padding: 32px 24px; display: grid; grid-template-columns: 280px 1fr; gap: 24px; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 32px 24px; display: grid; grid-template-columns: 280px 1fr; gap: 24px; }
   @media (max-width: 700px) { .container { grid-template-columns: 1fr; } }
+
+  /* ── Tab bar ── */
+  .tab-bar { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 2px solid #e1dfdd; }
+  .tab-btn { background: none; border: none; padding: 10px 20px; font-size: 14px; font-family: inherit; color: #605e5c; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; border-radius: 2px 2px 0 0; font-weight: 500; }
+  .tab-btn:hover { background: #f3f2f1; color: #323130; }
+  .tab-btn.active { color: #0078d4; border-bottom-color: #0078d4; font-weight: 600; }
+
+  /* ── Graph canvas ── */
+  #graphCanvas { width: 100%; height: 580px; border: 1px solid #e1dfdd; border-radius: 4px; background: #1a1a2e; }
+  .graph-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .graph-toolbar button { background: #f3f2f1; border: 1px solid #e1dfdd; border-radius: 2px; padding: 5px 12px; font-size: 12px; cursor: pointer; }
+  .graph-toolbar button:hover { background: #edebe9; }
+  .graph-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; margin-left: auto; }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(0,0,0,0.3); }
+  .legend-dot.company { background: #FFA366; }
+  .legend-dot.person  { background: #6B9FD4; }
+  .legend-dot.account { background: #66C285; border-radius: 2px; }
+  .legend-risk { display: flex; align-items: center; gap: 5px; }
+  .legend-border { width: 14px; height: 3px; border-radius: 1px; }
+  .legend-border.high   { background: #d13438; }
+  .legend-border.medium { background: #ca5010; }
+  .legend-border.low    { background: #107c10; }
+  .graph-status { font-size: 12px; color: #8a8886; margin-left: 10px; }
 
   .sidebar .card { background: #fff; border-radius: 4px; box-shadow: 0 1.6px 3.6px rgba(0,0,0,.13); padding: 16px; margin-bottom: 16px; }
   .sidebar h3 { font-size: 13px; font-weight: 600; color: #605e5c; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 10px; }
@@ -97,6 +122,40 @@
   </div>
 
   <div class="main-panel">
+
+    <!-- Tab bar -->
+    <div class="tab-bar">
+      <button class="tab-btn active" id="tabGraph" onclick="showTab('graph')">🌐 Graph View</button>
+      <button class="tab-btn" id="tabInvestigate" onclick="showTab('investigate')">🔍 Investigate</button>
+    </div>
+
+    <!-- ───── Graph Panel ───── -->
+    <div id="graphPanel">
+      <div class="card" style="padding:16px;">
+        <div class="graph-toolbar">
+          <button onclick="networkFitAll()">Fit all</button>
+          <button onclick="togglePhysics()">Toggle physics</button>
+          <button onclick="highlightHighRisk()">Highlight HIGH risk</button>
+          <button onclick="resetHighlight()">Reset</button>
+          <span class="graph-status" id="graphStatus">Loading graph…</span>
+          <div class="graph-legend">
+            <span style="font-size:11px;color:#636363;font-weight:600;">Nodes:&nbsp;</span>
+            <span class="legend-item"><span class="legend-dot company"></span>Company</span>
+            <span class="legend-item"><span class="legend-dot person"></span>Person</span>
+            <span class="legend-item"><span class="legend-dot account"></span>Account</span>
+            <span style="font-size:11px;color:#636363;font-weight:600;margin-left:8px;">Border risk:&nbsp;</span>
+            <span class="legend-item"><span class="legend-border high"></span>HIGH</span>
+            <span class="legend-item"><span class="legend-border medium"></span>MED</span>
+            <span class="legend-item"><span class="legend-border low"></span>LOW</span>
+          </div>
+        </div>
+        <div id="graphCanvas"></div>
+        <p style="font-size:11px;color:#8a8886;margin-top:8px;">Click a node to pre-fill an investigation query. Drag to rearrange. Scroll to zoom.</p>
+      </div>
+    </div>
+
+    <!-- ───── Investigation Panel (hidden by default) ───── -->
+    <div id="investigatePanel" style="display:none;">
     <div class="query-box">
       <div class="query-row">
         <textarea id="queryInput" placeholder="Enter a compliance investigation query…"></textarea>
@@ -118,7 +177,8 @@
       <div class="report-box" id="reportText"></div>
       <a id="traceLink" class="trace-link" href="#" target="_blank" style="display:none;"></a>
     </div>
-  </div>
+    </div><!-- /investigatePanel -->
+  </div><!-- /main-panel -->
 </div>
 
 <script>
@@ -153,6 +213,7 @@ loadSidebarData();
 
 function setQuery(text) {
   document.getElementById('queryInput').value = text;
+  showTab('investigate');
   document.getElementById('queryInput').focus();
 }
 
@@ -242,6 +303,123 @@ function doInvestigate() {
 
 function escHtml(t) {
   return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ─── Tab switching ───
+function showTab(tab) {
+  const tabs = { graph: 'graphPanel', investigate: 'investigatePanel' };
+  Object.entries(tabs).forEach(([key, panelId]) => {
+    document.getElementById(panelId).style.display = key === tab ? '' : 'none';
+    const btn = document.getElementById('tab' + key.charAt(0).toUpperCase() + key.slice(1));
+    if (btn) btn.classList.toggle('active', key === tab);
+  });
+}
+
+// ─── vis-network graph ───
+let network   = null;
+let graphData = null;
+let physicsEnabled = true;
+
+const RISK_BORDER = { HIGH: '#d13438', MEDIUM: '#ca5010', LOW: '#107c10' };
+const TYPE_BG     = { Company: '#FFA366', Person: '#6B9FD4', Account: '#66C285' };
+
+async function initGraph() {
+  try {
+    const r = await fetch(`${API}/api/graph/network`);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+
+    const nodes = new vis.DataSet(data.nodes.map(n => ({
+      id:    n.id,
+      label: n.label,
+      group: n.group,
+      title: n.title,            // HTML tooltip
+      _risk: n.risk,
+      shape: n.group === 'Account' ? 'box' : 'ellipse',
+      color: {
+        background: TYPE_BG[n.group]   || '#cccccc',
+        border:     RISK_BORDER[n.risk] || '#8a8886',
+        highlight: { background: TYPE_BG[n.group] || '#cccccc', border: '#0078d4' },
+        hover:     { background: TYPE_BG[n.group] || '#cccccc', border: '#0078d4' },
+      },
+      borderWidth: n.risk === 'HIGH' ? 3 : 2,
+      font: { size: 12, color: '#f0f0f0' },
+    })));
+
+    const edges = new vis.DataSet(data.edges.map((e, i) => ({
+      id:    i,
+      from:  e.from,
+      to:    e.to,
+      label: e.label,
+      title: e.relationship,
+      arrows: 'to',
+      font:   { size: 10, color: '#bbbbbb', align: 'middle', strokeWidth: 0 },
+      color:  { color: '#5a5a7a', highlight: '#0078d4', hover: '#0078d4' },
+      smooth: { type: 'curvedCW', roundness: 0.1 },
+    })));
+
+    graphData = { nodes, edges };
+
+    const container = document.getElementById('graphCanvas');
+    const options = {
+      interaction: { hover: true, tooltipDelay: 200, navigationButtons: false },
+      physics: {
+        enabled: true,
+        forceAtlas2Based: {
+          gravitationalConstant: -80,
+          centralGravity: 0.01,
+          springLength: 140,
+          damping: 0.5,
+        },
+        solver: 'forceAtlas2Based',
+        stabilization: { iterations: 200, updateInterval: 25 },
+      },
+      layout: { improvedLayout: true },
+      nodes: { margin: 6 },
+      edges: { selectionWidth: 2 },
+    };
+
+    network = new vis.Network(container, graphData, options);
+
+    network.on('stabilizationIterationsDone', () => {
+      network.setOptions({ physics: { enabled: false } });
+      physicsEnabled = false;
+      document.getElementById('graphStatus').textContent =
+        `${data.nodes.length} nodes · ${data.edges.length} edges — click a node to investigate`;
+    });
+
+    network.on('click', params => {
+      if (params.nodes.length === 1) {
+        const n = graphData.nodes.get(params.nodes[0]);
+        if (n) {
+          document.getElementById('queryInput').value =
+            `Investigate ${n.label} — analyse its connections, ownership, and compliance risk`;
+          showTab('investigate');
+        }
+      }
+    });
+
+  } catch (err) {
+    document.getElementById('graphStatus').textContent = 'Failed to load graph: ' + err.message;
+  }
+}
+initGraph();
+
+function networkFitAll()    { if (network) network.fit({ animation: { duration: 500 } }); }
+function togglePhysics()    {
+  if (!network) return;
+  physicsEnabled = !physicsEnabled;
+  network.setOptions({ physics: { enabled: physicsEnabled } });
+}
+function highlightHighRisk() {
+  if (!graphData) return;
+  graphData.nodes.forEach(n => {
+    graphData.nodes.update({ id: n.id, opacity: n._risk === 'HIGH' ? 1 : 0.15 });
+  });
+}
+function resetHighlight() {
+  if (!graphData) return;
+  graphData.nodes.forEach(n => graphData.nodes.update({ id: n.id, opacity: 1 }));
 }
 </script>
 </body>

@@ -1309,8 +1309,14 @@ class ManifestExecutor:
         """
         agents = {a.name: a for a in self._manifest.agents}
 
-        # Identify supervisor vs specialists
-        supervisor_cfg = agents.get("supervisor") or self._manifest.agents[0]
+        # Identify supervisor vs specialists.
+        # Priority: (1) agent with role="supervisor", (2) agent named "supervisor",
+        # (3) first agent in manifest.
+        supervisor_cfg = (
+            next((a for a in self._manifest.agents if getattr(a, "role", None) == "supervisor"), None)
+            or agents.get("supervisor")
+            or self._manifest.agents[0]
+        )
         specialists_cfg = {k: v for k, v in agents.items() if k != supervisor_cfg.name}
         specialist_names = list(specialists_cfg.keys())
 
@@ -1391,7 +1397,37 @@ class ManifestExecutor:
                 lf_gen = None
 
             resp = await llm.complete(messages=messages, temperature=cfg.temperature)
-            decision = resp.content.strip().lower().replace(" ", "_").strip(".")
+
+            # ── Extract routing decision from the LLM response ───────────────
+            # The response may be verbose reasoning. We look for:
+            #   1. A line starting with "NEXT:" or "ROUTE:"  (explicit format)
+            #   2. Any line whose entire text is a specialist name or "finish"
+            #   3. Any line that CONTAINS a specialist name as a whole word
+            # The manifest system prompt should include the NEXT: instruction.
+            import re as _re
+            content = resp.content.strip()
+            content_lower = content.lower()
+            specialist_set = set(specialist_names)
+
+            # Strategy 1: explicit NEXT:/ROUTE: tag
+            _route_match = _re.search(r'(?:^|\n)\s*(?:next|route):\s*([a-z_]+)', content_lower)
+            if _route_match:
+                decision = _route_match.group(1).strip().rstrip('.')
+            else:
+                # Strategy 2: last non-blank line that is exactly a specialist or "finish"
+                lines = [l.strip().lower().replace(' ', '_').rstrip('.') for l in content.split('\n') if l.strip()]
+                decision = 'finish'
+                for line in reversed(lines):
+                    if line in specialist_set or line == 'finish':
+                        decision = line
+                        break
+                    # Strategy 3: line contains a specialist name as a whole word
+                    for sp_name in specialist_names:
+                        if _re.search(r'\b' + _re.escape(sp_name) + r'\b', line):
+                            decision = sp_name
+                            break
+                    if decision != 'finish':
+                        break
 
             if lf_gen:
                 try:

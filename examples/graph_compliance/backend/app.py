@@ -42,6 +42,7 @@ from backend.compliance_graph import (
     get_risk_indicators,
     graph_stats,
     ENTITIES,
+    EDGES,
 )
 
 # ── Config ────────────────────────────────────────────────────────────
@@ -214,6 +215,51 @@ async def api_graph_stats():
 async def api_list_entities():
     """List all entities in the compliance graph."""
     return {"entities": ENTITIES, "count": len(ENTITIES)}
+
+
+@app.get("/api/graph/network")
+async def api_graph_network():
+    """Return nodes and edges in vis-network format for the graph canvas."""
+    nodes = []
+    for e in ENTITIES:
+        nodes.append({
+            "id": e["id"],
+            "label": e["name"],
+            "group": e["type"],          # Company / Person / Account
+            "risk": e["risk_level"],
+            "flags": e.get("flags", []),
+            "title": _entity_tooltip(e),  # HTML tooltip shown on hover
+            **{k: v for k, v in e.items() if k not in ("id", "name", "type", "risk_level", "flags")},
+        })
+
+    edges = []
+    for src, dst, rel, attrs in EDGES:
+        label = rel.replace("_", " ").title()
+        # Shorten OWNS label to include ownership %
+        if rel == "OWNS" and "pct" in attrs:
+            label = f"OWNS {attrs['pct']}%"
+        edges.append({
+            "from": src,
+            "to": dst,
+            "label": label,
+            "relationship": rel,
+            "attrs": attrs,
+        })
+
+    return {"nodes": nodes, "edges": edges}
+
+
+def _entity_tooltip(e: dict) -> str:
+    lines = [f"<b>{e['name']}</b>", f"Type: {e['type']}", f"Risk: {e['risk_level']}"]
+    if e.get("country"):
+        lines.append(f"Country: {e['country']}")
+    if e.get("nationality"):
+        lines.append(f"Nationality: {e['nationality']}")
+    if e.get("bank"):
+        lines.append(f"Bank: {e['bank']}")
+    if e.get("flags"):
+        lines.append(f"Flags: {', '.join(e['flags'])}")
+    return "<br>".join(lines)
 
 
 @app.get("/api/investigate/stream")

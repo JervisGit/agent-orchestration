@@ -57,17 +57,17 @@
 <body>
 <header>
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="11" r="7" stroke="white" stroke-width="2"/><line x1="16.5" y1="16.5" x2="22" y2="22" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>
-  <h1>Internal Knowledge Search</h1>
+  <h1>Singapore Tax Regulations Search</h1>
   <span>Powered by AO — RAG (retrieval-augmented generation)</span>
 </header>
 
 <div class="container">
   <div class="search-box">
     <div class="search-row">
-      <input type="text" id="query" placeholder="Ask a question about company policies…" autofocus>
+      <input type="text" id="query" placeholder="Ask a question about Singapore tax regulations…" autofocus>
       <button class="primary" id="searchBtn" onclick="doSearch()">Search</button>
     </div>
-    <div class="hint">Try: "How many days of annual leave do I get?" or "What is the procurement approval limit?"</div>
+    <div class="hint">Try: "What is the corporate tax rate in Singapore?" or "When do I need to register for GST?" or "What is the ABSD rate for foreigners?"</div>
   </div>
 
   <div id="error" class="error-box" style="display:none;"></div>
@@ -91,9 +91,9 @@
     <h2>Add a Document to the Knowledge Base</h2>
     <div class="ingest-form">
       <label for="docTitle">Document Title</label>
-      <input type="text" id="docTitle" placeholder="e.g. Leave Cancellation Policy">
+      <input type="text" id="docTitle" placeholder="e.g. Singapore Stamp Duty Act">
       <label for="docContent">Document Content</label>
-      <textarea id="docContent" rows="5" placeholder="Paste the policy text here…"></textarea>
+      <textarea id="docContent" rows="5" placeholder="Paste the tax regulation text here…"></textarea>
       <button class="primary" onclick="ingestDoc()">Ingest Document</button>
       <div class="ingest-success" id="ingestMsg" style="display:none;"></div>
     </div>

@@ -31,7 +31,17 @@ agents:
       what has already been found.  When you have enough information to give a complete
       answer, output FINISH.
 
-      Always reason step-by-step. State what you found and what the next logical step is.
+      Available specialists:
+      {specialists}
+
+      Rules:
+      1. Delegate to graph_investigator before drawing any conclusions.
+      2. After each specialist response, decide whether another investigation step is needed.
+      3. Do not call the same specialist more than once for the same sub-question.
+      4. Always end your response with a routing instruction on its own line:
+           NEXT: graph_investigator
+         or
+           NEXT: FINISH
     model: gpt-4o
     tools: []
     temperature: 0.0
