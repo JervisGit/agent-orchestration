@@ -87,14 +87,7 @@ variable "tags" { type = map(string) }
 # Stored as a APIM Named Value (AgentPermissions) — update without Terraform re-apply once deployed.
 variable "agent_permissions" {
   type = string
-  default = jsonencode({
-    filing_extension   = ["/agents/taxpayer"]
-    assessment_relief  = ["/agents/taxpayer"]
-    penalty_waiver     = ["/agents/taxpayer"]
-    supervisor         = ["/agents/taxpayer"]
-    rag_search         = ["/agents/search"]
-    graph_compliance   = ["/agents/compliance"]
-  })
+  default = "{\"filing_extension\":[\"/agents/taxpayer\"],\"assessment_relief\":[\"/agents/taxpayer\"],\"penalty_waiver\":[\"/agents/taxpayer\"],\"supervisor\":[\"/agents/taxpayer\"],\"rag_search\":[\"/agents/search\"],\"graph_compliance\":[\"/agents/compliance\"]}"
   description = "JSON string mapping agent manifest names to allowed APIM path prefixes."
 }
 
@@ -364,21 +357,24 @@ resource "azurerm_api_management_api_operation_policy" "taxpayer_lookup" {
           </required-claims>
         </validate-jwt>
         <!-- Step 3 (ADR-013 logical identity): check X-Agent-ID against AgentPermissions map.
-             X-Agent-ID is injected by ManifestExecutor from the manifest agent name — never from user input. -->
+             X-Agent-ID is injected by ManifestExecutor from the manifest agent name — never from user input.
+             AgentPermissions is a Named Value substituted as a raw string — avoids embedding
+             JSON with unescaped " inside a C# string literal. -->
         <set-variable name="agentId"
                       value="@(context.Request.Headers.GetValueOrDefault(&quot;X-Agent-ID&quot;, &quot;Unknown&quot;))" />
-        <set-variable name="permissions"
-                      value="@(JObject.Parse(&quot;{{AgentPermissions}}&quot;))" />
+        <set-variable name="agentPermissionsJson" value="{{AgentPermissions}}" />
         <choose>
           <when condition="@{
-              var id    = (string)context.Variables[&quot;agentId&quot;];
-              var perms = (JObject)context.Variables[&quot;permissions&quot;];
-              var path  = context.Request.Url.Path.ToLower();
-              if (perms.ContainsKey(id)) {
-                  return !perms[id].ToObject&lt;List&lt;string&gt;&gt;()
-                                   .Any(p =&gt; path.StartsWith(p.ToLower()));
-              }
-              return true; // unknown agent ID — block
+              var id   = (string)context.Variables[&quot;agentId&quot;];
+              var path = context.Request.Url.Path.ToLower();
+              try {
+                  var perms = JObject.Parse((string)context.Variables[&quot;agentPermissionsJson&quot;]);
+                  if (perms.ContainsKey(id)) {
+                      var allowed = perms[id].ToObject&lt;List&lt;string&gt;&gt;();
+                      return !allowed.Any(p =&gt; path.StartsWith(p.ToLower()));
+                  }
+              } catch { }
+              return true;
           }">
             <return-response>
               <set-status code="403" reason="Forbidden" />
