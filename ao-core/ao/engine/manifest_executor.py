@@ -85,6 +85,12 @@ from ao.config.manifest import AgentConfig, AppManifest
 from ao.engine.patterns.router import RouterState
 from ao.identity.context import IdentityContext, IdentityMode
 from ao.llm.base import LLMProvider
+from ao.resilience.circuit_breaker import (
+    CircuitBreakerRegistry,
+    CircuitOpenError,
+    PerRunCallCounter,
+    ToolCallLimitExceeded,
+)
 from ao.tools.schema import AgentMessage, ToolResult, ToolSchema
 
 logger = logging.getLogger(__name__)
@@ -117,6 +123,10 @@ class ManifestExecutor:
         # trace_ids that were cancelled — kept until explicitly cleared so
         # is_cancelled() remains True even after the finally block cleans up the event
         self._cancelled_traces: set[str] = set()
+        # Circuit breaker registry — process-level, survives across runs (ADR-015)
+        self._circuit_breakers = CircuitBreakerRegistry()
+        # Per-run call counters — keyed by trace_id, discarded after run (ADR-015)
+        self._run_counters: dict[str, PerRunCallCounter] = {}
         # Checkpointer: MemorySaver saves node state after every node so a cancelled
         # run can resume from the last completed node within the same process.
         # AsyncRedisSaver (langgraph-checkpoint-redis) is intentionally NOT used here:
@@ -164,6 +174,8 @@ class ManifestExecutor:
 
     def clear_token_stream(self, trace_id: str) -> None:
         self._token_queues.pop(trace_id, None)
+        # Discard per-run call counter when the run ends (ADR-015)
+        self._run_counters.pop(trace_id, None)
 
     def cancel_stream(self, trace_id: str) -> None:
         """Request cancellation of an active astream() run.
@@ -387,6 +399,44 @@ class ManifestExecutor:
         trace_id = state.get("trace_id", "")
         token_queue = self._token_queues.get(trace_id)
 
+        # ── ADR-015: per-run call limit ──────────────────────────────
+        run_counter = self._run_counters.get(trace_id)
+        if run_counter is None:
+            run_counter = PerRunCallCounter()
+            self._run_counters[trace_id] = run_counter
+        try:
+            run_counter.check_and_increment(tool_name)
+        except ToolCallLimitExceeded as exc:
+            logger.warning("ToolCallLimitExceeded: %s", exc)
+            if token_queue:
+                try:
+                    token_queue.put_nowait({
+                        "node": f"tool:{tool_name}",
+                        "done": True,
+                        "detail": {"error": "call_limit_exceeded", "reason": str(exc)},
+                    })
+                except asyncio.QueueFull:
+                    pass
+            msg = {"role": "tool", "tool_call_id": call_id, "content": str(exc)}
+            return msg, {}
+
+        # ── ADR-015: circuit breaker ─────────────────────────────────
+        breaker = self._circuit_breakers.get(tool_name)
+        if not breaker.allow_call():
+            err = f"circuit_open: tool '{tool_name}' is temporarily unavailable (circuit open)"
+            logger.warning("CircuitBreaker blocking call to %s", tool_name)
+            if token_queue:
+                try:
+                    token_queue.put_nowait({
+                        "node": f"tool:{tool_name}",
+                        "done": True,
+                        "detail": {"error": "circuit_open", "tool": tool_name},
+                    })
+                except asyncio.QueueFull:
+                    pass
+            msg = {"role": "tool", "tool_call_id": call_id, "content": err}
+            return msg, {}
+
         try:
             # Inject identity into tool callables that declare the parameter.
             # Tools that do not declare `identity` are unaffected.
@@ -395,8 +445,10 @@ class ManifestExecutor:
             if identity is not None and "identity" in inspect.signature(fn).parameters:
                 call_args["identity"] = identity
             raw = await fn(**call_args) if asyncio.iscoroutinefunction(fn) else fn(**call_args)
+            breaker.record_success()
         except Exception as exc:
             logger.warning("Tool %s raised: %s", tool_name, exc, exc_info=True)
+            breaker.record_failure()
             raw = f"Error executing {tool_name}: {exc}"
 
         # Tools may return plain str or {"content": str, "state": dict}
