@@ -345,3 +345,16 @@ In the current codebase, all outbound APIM calls originate from tool functions c
 Use **X-Agent-ID + Named Value** as the enforcement mechanism when UAMI provisioning is blocked by approval processes. This is not a replacement for the ADR-013 UAMI model — it is a pragmatic intermediate that delivers per-agent access control today with no infrastructure changes. When per-UAMI isolation is approved, migrate to the production path described above; the two layers are additive (APIM can enforce both simultaneously).
 
 All tool calls that bypass APIM (e.g. direct DB queries) are not covered by this pattern — all agent resource access must route through APIM for the logical identity check to be effective.
+
+### Estimated implementation scope
+
+Given the current codebase, the changes are small and follow the **same `identity` injection pattern** already in `ToolExecutor.execute()`:
+
+| File | Change | ~Lines |
+|---|---|---|
+| `ao-core/ao/tools/executor.py` | Add `agent_name: str \| None = None` param to `execute()`; inject it when tool declares the parameter (same 3-line pattern as `identity`) | ~5 |
+| `ao-core/ao/engine/manifest_executor.py` | In `_execute_tool_call()`, resolve agent name from the active step/manifest and pass to `ToolExecutor.execute()` | ~4 |
+| `examples/email_assistant/backend/app.py` | Add `agent_name: str \| None = None` to `_tool_lookup_taxpayer`; include `X-Agent-ID` header in the httpx call | ~4 |
+| `infra/modules/apim/main.tf` | Add `azurerm_api_management_named_value` block for `AgentPermissions` JSON; extend operation-level inbound policy with the X-Agent-ID choice block | ~35 |
+
+**Total: ~15 lines of Python + ~35 lines of Terraform/APIM policy XML.** No new Azure resources, no schema changes, no new tests beyond the existing `TestToolExecutorIdentity` suite (add one parametrized case for `agent_name` injection).
