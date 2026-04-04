@@ -125,8 +125,8 @@
 
     <!-- Tab bar -->
     <div class="tab-bar">
-      <button class="tab-btn active" id="tabGraph" onclick="showTab('graph')">🌐 Graph View</button>
-      <button class="tab-btn" id="tabInvestigate" onclick="showTab('investigate')">🔍 Investigate</button>
+      <button class="tab-btn active" id="tabGraph" onclick="showTab('graph')">Graph View</button>
+      <button class="tab-btn" id="tabInvestigate" onclick="showTab('investigate')">Agent</button>
     </div>
 
     <!-- ───── Graph Panel ───── -->
@@ -233,7 +233,6 @@ function doInvestigate() {
 
   let reportBuf = '';
   let streaming = false;
-  let pendingReasoning = null;
 
   const es = new EventSource(`${API}/api/investigate/stream?q=${encodeURIComponent(q)}`);
   currentES = es;
@@ -245,28 +244,74 @@ function doInvestigate() {
       document.getElementById('stepsCard').style.display = '';
     }
 
-    if (msg.type === 'reasoning') {
-      pendingReasoning = msg.text;
+    // ── Planner (supervisor) decision card ──
+    if (msg.type === 'planner_step') {
+      const nextBadge = msg.next === 'FINISH'
+        ? `<span style="background:#dff6dd;color:#0b6f0b;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">✓ FINISH</span>`
+        : `<span style="background:#deecf9;color:#004578;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">→ ${escHtml(msg.next)}</span>`;
+      let inner = `<span class="step-icon">🧭</span><div>
+        <strong>${escHtml(msg.label)}</strong>&nbsp;${nextBadge}`;
+      if (msg.reasoning) {
+        inner += `<details class="reasoning"><summary>Planner reasoning (click to expand)…</summary><pre>${escHtml(msg.reasoning)}</pre></details>`;
+      }
+      inner += '</div>';
+      const div = document.createElement('div');
+      div.className = 'step supervisor';
+      div.innerHTML = inner;
+      document.getElementById('steps').appendChild(div);
     }
 
+    // ── Tool call step card ──
+    if (msg.type === 'tool_step') {
+      const args = msg.args || {};
+      const argStr = Object.entries(args).map(([k,v]) => `${k}: ${escHtml(String(v))}`).join(' | ');
+      let inner = `<span class="step-icon">🔍</span><div>
+        <strong>${escHtml(msg.label)}</strong>
+        <br><code style="font-size:11px;color:#4a154b;background:#f9f0ff;padding:1px 4px;border-radius:2px;">${escHtml(msg.tool)}(${argStr})</code>`;
+      if (msg.result) {
+        inner += `<details class="reasoning"><summary>Result (click to expand)…</summary><pre>${escHtml(msg.result)}</pre></details>`;
+      }
+      if (msg.judge && msg.judge.verdict) {
+        const jColor = msg.judge.verdict === 'APPROPRIATE' ? '#0b6f0b' : '#ca5010';
+        inner += `<br><span style="font-size:10px;color:${jColor};">🔎 Judge: ${escHtml(msg.judge.verdict)}</span>`;
+      }
+      inner += '</div>';
+      const div = document.createElement('div');
+      div.className = 'step tool';
+      div.innerHTML = inner;
+      document.getElementById('steps').appendChild(div);
+    }
+
+    // ── Agent (investigator / assessor) step card ──
+    if (msg.type === 'agent_step') {
+      const isInvestigator = msg.node === 'graph_investigator';
+      const icon = isInvestigator ? '🕵️' : '📋';
+      let inner = `<span class="step-icon">${icon}</span><div>
+        <strong>${escHtml(msg.label)}</strong>`;
+      if (msg.response) {
+        inner += `<details class="reasoning"><summary>Agent response (click to expand)…</summary><pre>${escHtml(msg.response)}</pre></details>`;
+      }
+      inner += '</div>';
+      const div = document.createElement('div');
+      div.className = `step${isInvestigator ? ' tool' : ''}`;
+      div.innerHTML = inner;
+      document.getElementById('steps').appendChild(div);
+    }
+
+    // ── Legacy step type (fallback) ──
     if (msg.type === 'step') {
-      const steps = document.getElementById('steps');
-      const isTool = msg.node.startsWith('tool:');
+      const isTool = msg.node && msg.node.startsWith('tool:');
       const isSuper = msg.node === 'compliance_planner';
       const icon = isTool ? '🔍' : isSuper ? '🧭' : '⚙️';
       const div = document.createElement('div');
       div.className = `step${isTool ? ' tool' : isSuper ? ' supervisor' : ''}`;
       let inner = `<span class="step-icon">${icon}</span><div><strong>${escHtml(msg.label || msg.node)}</strong>`;
       if (msg.detail && Object.keys(msg.detail).length) {
-        inner += `<br><span style="font-size:11px;color:#8a8886">${escHtml(JSON.stringify(msg.detail).substring(0, 120))}</span>`;
-      }
-      if (pendingReasoning) {
-        inner += `<details class="reasoning"><summary>Agent reasoning…</summary><pre>${escHtml(pendingReasoning)}</pre></details>`;
-        pendingReasoning = null;
+        inner += `<br><span style="font-size:11px;color:#8a8886">${escHtml(JSON.stringify(msg.detail).substring(0, 200))}</span>`;
       }
       inner += '</div>';
       div.innerHTML = inner;
-      steps.appendChild(div);
+      document.getElementById('steps').appendChild(div);
     }
 
     if (msg.type === 'token') {

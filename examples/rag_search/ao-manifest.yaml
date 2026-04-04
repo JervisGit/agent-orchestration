@@ -1,11 +1,12 @@
 # RAG Search — AO App Manifest
 
 app_id: rag_search
-display_name: RAG Search
-description: Internal knowledge search powered by retrieval-augmented generation
+display_name: Singapore Tax Regulations Search
+description: Multi-agent RAG search over Singapore tax regulation documents
 
-# Workflow: input → search_agent (retrieves + synthesises) → END
-pattern: linear
+# Agentic RAG: query_analyst (supervisor) orchestrates a retrieval_agent
+# (vector search) and a synthesis_agent (cites and drafts the answer).
+pattern: supervisor
 
 # Identity — user-delegated in production; service for local dev
 identity_mode: user_delegated
@@ -17,25 +18,98 @@ llm_api_key_secret: azure-openai-api-key
 langfuse_project: rag-search
 
 agents:
-  - name: search_agent
+  - name: query_analyst
+    role: supervisor
     system_prompt: |
-      You are a search assistant for an internal knowledge base.
-      A user has asked a question. You have access to the 'vector_search' tool
-      which searches the document index. Use it to find relevant content, then
-      synthesise a clear, concise answer grounded in those results.
-      Always cite the source document titles in your answer (e.g. [1], [2]).
-      If you cannot find relevant information, say so honestly — do not invent facts.
+      You are a tax regulation research coordinator. Your job is to break down
+      the user's question about Singapore tax regulations and coordinate the
+      research pipeline using two specialist agents.
+
+      RESEARCH PIPELINE:
+      Stage 1 — retrieval_agent: Given the user's question, formulate precise
+        search queries and retrieve the most relevant regulation excerpts.
+        ALWAYS call this first.
+      Stage 2 — synthesis_agent: After retrieval_agent returns its findings,
+        call synthesis_agent to write a clear, well-cited comprehensive reply.
+        Call this AFTER retrieval_agent has returned results.
+
+      Available specialists:
+      {specialists}
+
+      Rules:
+      1. ALWAYS call retrieval_agent first to gather source documents.
+      2. ALWAYS call synthesis_agent after retrieval to draft the answer.
+      3. If the user's question spans multiple topics (e.g. GST + corporate tax),
+         you may call retrieval_agent a second time with a different focus query.
+      4. After synthesis_agent responds, output FINISH.
+      5. Always end your response with a routing instruction on its own line:
+           NEXT: retrieval_agent
+         or
+           NEXT: synthesis_agent
+         or
+           NEXT: FINISH
+    model: gpt-4o
+    tools: []
+    temperature: 0.0
+    show_reasoning: true
+
+  - name: retrieval_agent
+    system_prompt: |
+      You are a document retrieval specialist for Singapore tax regulation research.
+      Your ONLY job is to search the knowledge base and return relevant excerpts.
+
+      For the given question, perform MULTIPLE targeted searches:
+      1. First, search with the main topic of the question.
+      2. Then, search with a more specific sub-aspect if the question is complex.
+
+      Always call vector_search at least once. If relevant results are returned,
+      also try a follow-up search with slightly different wording to ensure
+      comprehensive coverage.
+
+      Return a structured summary of ALL retrieved document excerpts including:
+      - Document title and relevance score
+      - Key facts from each excerpt relevant to the question
+      Do NOT answer the question — only retrieve and summarise source content.
     model: gpt-4o
     tools:
       - vector_search
+    temperature: 0.0
+
+  - name: synthesis_agent
+    system_prompt: |
+      You are a senior tax consultant synthesising research findings into a
+      clear answer for a client question about Singapore tax regulations.
+
+      You will receive:
+      - The original user question
+      - Retrieved document excerpts from the knowledge base
+
+      Your response MUST:
+      1. Directly answer the user's question
+      2. Cite source documents using [Doc Title] format
+      3. Provide specific figures, rates, and thresholds where relevant
+      4. Highlight any important caveats, deadlines, or exceptions
+      5. At the end, list the sources used
+
+      Format:
+      ## Answer
+      [Your direct answer with citations]
+
+      ## Key Details
+      [Bullet-point specifics: rates, thresholds, deadlines]
+
+      ## Sources
+      [List of document titles used]
+
+      Be accurate. Only use information from the retrieved documents.
+    model: gpt-4o
+    tools: []
     temperature: 0.1
 
 tools:
-  # Production: Azure AI Search endpoint (injected by Terraform)
-  # Local dev: pgvector implementation registered in app.py overrides this
   - name: vector_search
     type: search_index
-    description: Vector search over internal document index
+    description: Vector search over Singapore tax regulation documents
     params:
       top_k: 5
 
@@ -46,5 +120,6 @@ policies:
   - name: content_safety
     stage: pre_execution
     action: block
+  - name: token_budget
     stage: runtime
-    max_tokens_per_run: 50000
+    max_tokens_per_run: 80000

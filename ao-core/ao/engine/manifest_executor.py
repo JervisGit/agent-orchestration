@@ -425,7 +425,7 @@ class ManifestExecutor:
             lf_trace=lf_trace,
         )
 
-        # Notify queue that tool call completed — include args + result summary + judge verdict
+        # Notify queue that tool call completed — include args, truncated result, and judge verdict
         if token_queue:
             try:
                 token_queue.put_nowait({
@@ -433,9 +433,7 @@ class ManifestExecutor:
                     "done": True,
                     "detail": {
                         "args": args,
-                        "found": bool(state_update.get("taxpayer")),
-                        "taxpayer_name": (state_update.get("taxpayer") or {}).get("full_name"),
-                        "taxpayer_id": (state_update.get("taxpayer") or {}).get("tax_id"),
+                        "result": content_str[:600],   # first 600 chars of tool result
                         "judge": tool_judge,
                     },
                 })
@@ -827,15 +825,19 @@ class ManifestExecutor:
             # Only prepend _context if no tools available for this agent
             if ctx and not allowed_tools:
                 parts.append(ctx)
-            # Instruct the LLM about the tools it is allowed to use
+            # Instruct the LLM about the tools it is allowed to use.
+            # Only append the taxpayer-lookup hint when that specific tool is available
+            # so that agents in other apps (e.g. graph_compliance) aren't confused.
             if allowed_tools:
                 tool_names = [t["function"]["name"] for t in allowed_tools]
-                parts.append(
-                    f"You have access to the following tools: {', '.join(tool_names)}.\n"
-                    "When the email contains a Tax Identification Number (TIN, format SG-T###-####), "
-                    "ALWAYS call 'lookup_taxpayer' BEFORE drafting your reply.\n"
-                    "Never guess or invent taxpayer data — only use the information returned by the tool."
-                )
+                tool_hint = f"You have access to the following tools: {', '.join(tool_names)}. Use them to complete the task.\n"
+                if "lookup_taxpayer" in tool_names:
+                    tool_hint += (
+                        "When the email contains a Tax Identification Number (TIN, format SG-T###-####), "
+                        "ALWAYS call 'lookup_taxpayer' BEFORE drafting your reply.\n"
+                        "Never guess or invent taxpayer data — only use the information returned by the tool."
+                    )
+                parts.append(tool_hint)
             parts.append(cfg.system_prompt)
             if cfg.sop:
                 parts.append(f"SOP YOU MUST FOLLOW:\n{cfg.sop}")
@@ -867,7 +869,13 @@ class ManifestExecutor:
             extra_state: dict = {}
             max_tool_rounds = 5
             for _round in range(max_tool_rounds):
-                resp = await llm.complete(messages=messages, temperature=cfg.temperature, **tool_kwargs)
+                # On the first round, require that the model calls at least one tool
+                # (tool_choice="required") so it doesn't skip straight to a text reply.
+                # On subsequent rounds, let the model decide ("auto").
+                round_kwargs = dict(tool_kwargs)
+                if allowed_tools and _round == 0:
+                    round_kwargs["tool_choice"] = "required"
+                resp = await llm.complete(messages=messages, temperature=cfg.temperature, **round_kwargs)
 
                 if resp.tool_calls:
                     # Append assistant message with tool_call requests
@@ -941,7 +949,13 @@ class ManifestExecutor:
                 else:
                     resp_content = raw_content
                 try:
-                    token_queue.put_nowait({"node": cfg.name, "done": True})
+                    # Include the first 800 chars of the specialist's final response
+                    # so the frontend can show it in the step card without a second API call.
+                    token_queue.put_nowait({
+                        "node": cfg.name,
+                        "done": True,
+                        "detail": {"response": resp_content[:800]},
+                    })
                 except asyncio.QueueFull:
                     pass
             else:
@@ -960,6 +974,7 @@ class ManifestExecutor:
                     pass
 
             result: dict = {
+                **state,                          # preserve all state keys through node transitions
                 "output": resp_content,
                 "messages": state.get("messages", []) + [
                     AgentMessage(role="agent", content=resp_content, agent_name=cfg.name).to_dict()
@@ -1437,23 +1452,31 @@ class ManifestExecutor:
 
             logger.info("Supervisor decided: '%s' (trace %s)", decision, state.get("trace_id", "?"))
 
-            # Enforce no-repeat: if the LLM picks a specialist already called, force FINISH
-            if decision in specialist_outputs:
-                logger.warning(
-                    "Supervisor tried to re-route to already-called specialist '%s' — forcing FINISH (trace %s)",
-                    decision, state.get("trace_id", "?"),
-                )
-                decision = "finish"
+            # Guard against infinite loops: each specialist may be called at most 3 times.
+            # This replaces the strict single-call no-repeat so multi-step investigations work.
+            specialist_call_counts: dict = dict(state.get("specialist_call_counts") or {})
+            if decision in specialist_names:
+                if specialist_call_counts.get(decision, 0) >= 3:
+                    logger.warning(
+                        "Supervisor tried to call '%s' a 4th time — forcing FINISH (trace %s)",
+                        decision, state.get("trace_id", "?"),
+                    )
+                    decision = "finish"
 
-            # Push supervisor decision to token queue so it appears in real-time in the UI
-            # (rather than landing at the end via graph_steps after specialists finish)
+            # Push supervisor decision to token queue using the agent's configured name
+            # so the frontend can style it correctly (compliance_planner → 🧭 icon).
             token_queue = executor._token_queues.get(state.get("trace_id", ""))
             if token_queue:
                 try:
+                    next_label = decision if decision not in ("finish",) and decision in specialist_names else "FINISH"
                     token_queue.put_nowait({
-                        "node": "supervisor",
+                        "node": cfg.name,          # e.g. "compliance_planner"
                         "done": True,
-                        "detail": {"next": decision if decision not in ("finish",) and decision in specialist_names else "FINISH"},
+                        "detail": {
+                            "next": next_label,
+                            "reasoning": content,  # full supervisor reasoning text
+                            "step": len(specialist_outputs),
+                        },
                     })
                 except asyncio.QueueFull:
                     pass
@@ -1510,6 +1533,7 @@ class ManifestExecutor:
                     final_output = state.get("output", "")
 
                 return {
+                    **state,
                     "next_agent": "FINISH",
                     "output": final_output,
                     "messages": state.get("messages", []) + [
@@ -1518,7 +1542,9 @@ class ManifestExecutor:
                 }
 
             return {
+                **state,
                 "next_agent": decision,
+                "specialist_call_counts": specialist_call_counts,
                 "messages": state.get("messages", []) + [
                     AgentMessage(role="supervisor", content=decision, agent_name=cfg.name).to_dict()
                 ],
@@ -1536,10 +1562,20 @@ class ManifestExecutor:
 
         async def node_supervisor_specialist(state: dict) -> dict:
             result = await base_node(state)
+            # Accumulate specialist_outputs (latest response per specialist name)
             specialist_outputs = dict(state.get("specialist_outputs") or {})
             specialist_outputs[cfg.name] = result.get("output", "")
-            result["specialist_outputs"] = specialist_outputs
-            return result
+            # Increment per-specialist call count for the max-calls guard
+            specialist_call_counts = dict(state.get("specialist_call_counts") or {})
+            specialist_call_counts[cfg.name] = specialist_call_counts.get(cfg.name, 0) + 1
+            # Spread **state first so all keys (input, trace_id, etc.) survive the
+            # LangGraph dict-schema node transition. Node return values override.
+            return {
+                **state,
+                **result,
+                "specialist_outputs": specialist_outputs,
+                "specialist_call_counts": specialist_call_counts,
+            }
 
         return node_supervisor_specialist
 

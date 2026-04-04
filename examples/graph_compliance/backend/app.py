@@ -162,6 +162,7 @@ class ComplianceState(TypedDict):
     output: str            # final investigation report
     next_agent: str        # supervisor routing (ManifestExecutor supervisor pattern)
     specialist_outputs: dict
+    specialist_call_counts: dict
     iterations: int
     trace_id: str
     policy_flags: list[str]
@@ -169,13 +170,14 @@ class ComplianceState(TypedDict):
 # ── Step labels ───────────────────────────────────────────────────────
 
 STEP_LABELS: dict[str, str] = {
-    "compliance_planner":     "Compliance Planner deciding next step",
-    "graph_investigator":     "Graph Investigator querying the compliance graph",
-    "tool:find_entity":       "Searching for entity in graph",
-    "tool:get_neighbors":     "Retrieving entity relationships",
-    "tool:find_path":         "Finding connection path between entities",
-    "tool:get_risk_indicators": "Assessing risk indicators",
-    "merge":                  "Synthesising investigation findings",
+    "compliance_planner":       "Compliance Planner deciding next step",
+    "graph_investigator":       "Graph Investigator querying the compliance graph",
+    "risk_assessor":            "Risk Assessor synthesising compliance findings",
+    "tool:find_entity":         "Graph query — finding entity",
+    "tool:get_neighbors":       "Graph query — retrieving relationships",
+    "tool:find_path":           "Graph query — tracing connection path",
+    "tool:get_risk_indicators": "Graph query — assessing risk indicators",
+    "merge":                    "Synthesising investigation findings",
 }
 
 # ── Lifespan ──────────────────────────────────────────────────────────
@@ -280,8 +282,8 @@ async def investigate_stream(q: str = Query(..., min_length=1)):
 
         initial_state: ComplianceState = {
             "input": q, "messages": [], "output": "",
-            "next_agent": "", "specialist_outputs": {}, "iterations": 0,
-            "trace_id": trace_id, "policy_flags": [],
+            "next_agent": "", "specialist_outputs": {}, "specialist_call_counts": {},
+            "iterations": 0, "trace_id": trace_id, "policy_flags": [],
         }
 
         token_queue: asyncio.Queue = asyncio.Queue(maxsize=1024)
@@ -312,8 +314,39 @@ async def investigate_stream(q: str = Query(..., min_length=1)):
                 yield f"data: {json.dumps({'type': 'token', 'node': item['node'], 'token': item['token']})}\n\n"
             elif item.get("done"):
                 node = item["node"]
-                label = STEP_LABELS.get(node, node)
-                step_evt = {"type": "step", "node": node, "label": label, "detail": item.get("detail", {})}
+                label = STEP_LABELS.get(node, node.replace("_", " ").title())
+                detail = item.get("detail", {})
+
+                # Supervisor steps carry routing decision + full reasoning text
+                if node == "compliance_planner":
+                    step_evt = {
+                        "type": "planner_step",
+                        "node": node,
+                        "label": label,
+                        "next": detail.get("next", ""),
+                        "step": detail.get("step", 0),
+                        "reasoning": detail.get("reasoning", ""),
+                    }
+                # Tool call steps carry query args + graph result
+                elif node.startswith("tool:"):
+                    tool_name = node[5:]  # strip "tool:"
+                    step_evt = {
+                        "type": "tool_step",
+                        "node": node,
+                        "label": label,
+                        "tool": tool_name,
+                        "args": detail.get("args", {}),
+                        "result": detail.get("result", ""),
+                        "judge": detail.get("judge"),
+                    }
+                # Specialist (investigator / assessor) step carries response preview
+                else:
+                    step_evt = {
+                        "type": "agent_step",
+                        "node": node,
+                        "label": label,
+                        "response": detail.get("response", ""),
+                    }
                 yield f"data: {json.dumps(step_evt)}\n\n"
 
         await graph_task
@@ -357,8 +390,8 @@ async def investigate(body: InvestigateRequest):
 
     state: ComplianceState = {
         "input": body.query, "messages": [], "output": "",
-        "next_agent": "", "specialist_outputs": {}, "iterations": 0,
-        "trace_id": trace_id, "policy_flags": [],
+        "next_agent": "", "specialist_outputs": {}, "specialist_call_counts": {},
+        "iterations": 0, "trace_id": trace_id, "policy_flags": [],
     }
     result = await executor.ainvoke(state)
     return {

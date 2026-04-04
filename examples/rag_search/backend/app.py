@@ -177,7 +177,7 @@ _VECTOR_SEARCH_SCHEMA: dict = {
 
 # ── Wire executor ────────────────────────────────────────────────────
 executor.register_tool("vector_search", _tool_vector_search, _VECTOR_SEARCH_SCHEMA)
-compiled_graph = executor.compile(state_schema=dict)  # generic dict state for linear
+compiled_graph = executor.compile(state_schema=dict)  # supervisor pattern with dict state
 
 # ── Policy engine ────────────────────────────────────────────────────
 policy_engine = PolicyEngine()
@@ -199,10 +199,22 @@ policies: PolicySet = (
 class RAGState(TypedDict):
     input: str           # user question (executor reads this key)
     messages: list[dict]
-    output: str          # synthesised answer
-    sources: list[dict]  # retrieved chunks
+    output: str          # synthesised answer (set by supervisor on FINISH)
+    sources: list[dict]  # retrieved chunks (set by retrieval_agent tool calls)
+    specialist_outputs: dict
+    specialist_call_counts: dict
+    next_agent: str
     trace_id: str
     policy_flags: list[str]
+
+# ── Step labels for workflow panel ──────────────────────────────────
+
+RAG_STEP_LABELS: dict[str, str] = {
+    "query_analyst":        "Research Coordinator deciding strategy",
+    "retrieval_agent":      "Retrieval Agent searching knowledge base",
+    "synthesis_agent":      "Synthesis Agent drafting cited answer",
+    "tool:vector_search":   "Vector search — querying document index",
+}
 
 # ── Sample documents for demo ────────────────────────────────────────
 
@@ -463,7 +475,8 @@ async def search_stream(q: str = Query(..., min_length=1)):
 
         initial_state: RAGState = {
             "input": q, "messages": [], "output": "", "sources": [],
-            "trace_id": trace_id, "policy_flags": [],
+            "specialist_outputs": {}, "specialist_call_counts": {},
+            "next_agent": "", "trace_id": trace_id, "policy_flags": [],
         }
 
         token_queue: asyncio.Queue = asyncio.Queue(maxsize=512)
@@ -494,8 +507,17 @@ async def search_stream(q: str = Query(..., min_length=1)):
             elif item.get("done"):
                 node = item["node"]
                 detail = item.get("detail", {})
-                label = "Searching knowledge base" if node.startswith("tool:") else "Synthesising answer"
-                yield f"data: {json.dumps({'type': 'step', 'node': node, 'label': label, 'detail': detail})}\n\n"
+                label = RAG_STEP_LABELS.get(node, node.replace("_", " ").title())
+
+                if node == "query_analyst":
+                    # Supervisor routing decision
+                    yield f"data: {json.dumps({'type': 'planner_step', 'node': node, 'label': label, 'next': detail.get('next',''), 'step': detail.get('step',0), 'reasoning': detail.get('reasoning','')})}\n\n"
+                elif node.startswith("tool:"):
+                    # Tool call with query args + truncated result
+                    yield f"data: {json.dumps({'type': 'tool_step', 'node': node, 'label': label, 'tool': node[5:], 'args': detail.get('args',{}), 'result': detail.get('result','')[:500], 'judge': detail.get('judge')})}\n\n"
+                else:
+                    # Specialist agent final response
+                    yield f"data: {json.dumps({'type': 'agent_step', 'node': node, 'label': label, 'response': detail.get('response','')})}\n\n"
 
         await graph_task
 
@@ -542,7 +564,8 @@ async def search(body: SearchRequest):
 
     state: RAGState = {
         "input": body.query, "messages": [], "output": "", "sources": [],
-        "trace_id": trace_id, "policy_flags": [],
+        "specialist_outputs": {}, "specialist_call_counts": {},
+        "next_agent": "", "trace_id": trace_id, "policy_flags": [],
     }
     result = await executor.ainvoke(state)
     return {

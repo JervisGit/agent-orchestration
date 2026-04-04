@@ -18,7 +18,7 @@ class AzureOpenAIProvider(LLMProvider):
         self,
         endpoint: str,
         api_key: str | None = None,
-        api_version: str = "2024-06-01",
+        api_version: str = "2025-01-01-preview",
         default_model: str = "gpt-4o",
         azure_ad_token_provider=None,
     ):
@@ -112,7 +112,7 @@ class AzureOpenAIProvider(LLMProvider):
         self,
         endpoint: str,
         api_key: str | None = None,
-        api_version: str = "2024-06-01",
+        api_version: str = "2025-01-01-preview",
         default_model: str = "gpt-4o",
         azure_ad_token_provider=None,
     ):
@@ -158,9 +158,21 @@ class AzureOpenAIProvider(LLMProvider):
                 "total_tokens": response.usage.total_tokens,
             }
 
+        tool_calls = None
+        if choice.message.tool_calls:
+            tool_calls = [
+                {
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments,
+                }
+                for tc in choice.message.tool_calls
+            ]
+
         return LLMResponse(
             content=choice.message.content or "",
             model=response.model or deployment,
             usage=usage,
             raw=response.model_dump(),
+            tool_calls=tool_calls,
         )

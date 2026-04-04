@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RAG Search — Internal Knowledge Base</title>
+<title>Singapore Tax Regulations Search</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f3f2f1; color: #323130; min-height: 100vh; }
   header { background: #0078d4; color: #fff; padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
   header h1 { font-size: 20px; font-weight: 600; }
   header span { font-size: 13px; opacity: .8; }
-  .container { max-width: 860px; margin: 0 auto; padding: 32px 24px; }
+  .container { max-width: 920px; margin: 0 auto; padding: 32px 24px; }
   .search-box { background: #fff; border-radius: 4px; box-shadow: 0 1.6px 3.6px rgba(0,0,0,.13); padding: 24px; margin-bottom: 24px; }
   .search-row { display: flex; gap: 10px; }
   input[type=text] { flex: 1; border: 1px solid #8a8886; border-radius: 2px; padding: 8px 12px; font-size: 15px; outline: none; }
@@ -20,19 +20,24 @@
   button.primary:hover:not(:disabled) { background: #106ebe; }
   .hint { margin-top: 10px; font-size: 12px; color: #605e5c; }
 
-  .card { background: #fff; border-radius: 4px; box-shadow: 0 1.6px 3.6px rgba(0,0,0,.13); padding: 24px; margin-bottom: 16px; }
-  .card h3 { font-size: 14px; font-weight: 600; color: #605e5c; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
+  .card { background: #fff; border-radius: 4px; box-shadow: 0 1.6px 3.6px rgba(0,0,0,.13); padding: 20px; margin-bottom: 16px; }
+  .card h3 { font-size: 13px; font-weight: 600; color: #605e5c; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
 
+  /* Workflow step cards */
   .steps { display: flex; flex-direction: column; gap: 6px; }
-  .step { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: #faf9f8; border-left: 3px solid #0078d4; font-size: 13px; border-radius: 0 2px 2px 0; }
-  .step.tool { border-color: #8764b8; }
-  .step-dot { width: 8px; height: 8px; border-radius: 50%; background: #0078d4; flex-shrink: 0; }
-  .step.tool .step-dot { background: #8764b8; }
+  .step { display: flex; align-items: flex-start; gap: 10px; padding: 8px 12px; background: #faf9f8; border-left: 3px solid #0078d4; font-size: 13px; border-radius: 0 2px 2px 0; }
+  .step.tool     { border-color: #8764b8; }
+  .step.agent    { border-color: #00b7c3; }
+  .step.supervisor { border-color: #0078d4; font-style: italic; }
+  .step-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+  details.reasoning { margin-top: 5px; font-size: 12px; }
+  details.reasoning summary { cursor: pointer; color: #605e5c; }
+  details.reasoning pre { background: #f8f8f8; padding: 8px; border-radius: 2px; margin-top: 4px; white-space: pre-wrap; font-family: 'Cascadia Code', Consolas, monospace; font-size: 11px; color: #444; max-height: 260px; overflow-y: auto; }
 
   .answer-box { background: #fff; border-radius: 4px; box-shadow: 0 1.6px 3.6px rgba(0,0,0,.13); padding: 24px; margin-bottom: 16px; }
-  .answer-box h3 { font-size: 14px; font-weight: 600; color: #605e5c; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
-  .answer-text { font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
-  .cursor { display: inline-block; width: 2px; height: 1em; background: #0078d4; animation: blink 0.8s steps(1) infinite; vertical-align: text-bottom; margin-left: 1px; }
+  .answer-box h3 { font-size: 13px; font-weight: 600; color: #605e5c; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
+  .answer-text { font-size: 15px; line-height: 1.65; white-space: pre-wrap; }
+  .cursor { display: inline-block; width: 2px; height: 1em; background: #0078d4; animation: blink 0.8s steps(1) infinite; vertical-align: text-bottom; }
   @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
   .sources { margin-top: 16px; }
@@ -41,6 +46,8 @@
   .source-tag .sim { color: #0078d4; font-weight: 600; }
 
   .error-box { background: #fde7e9; border-left: 4px solid #d13438; padding: 12px 16px; border-radius: 2px; font-size: 14px; color: #a4262c; margin-bottom: 16px; }
+  .trace-link { font-size: 12px; color: #0078d4; text-decoration: none; margin-top: 8px; display: inline-block; }
+  .trace-link:hover { text-decoration: underline; }
 
   .ingest-section { margin-top: 32px; }
   .ingest-section h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
@@ -49,16 +56,13 @@
   .ingest-form input, .ingest-form textarea { width: 100%; border: 1px solid #8a8886; border-radius: 2px; padding: 7px 10px; font-size: 14px; font-family: inherit; margin-bottom: 12px; outline: none; resize: vertical; }
   .ingest-form input:focus, .ingest-form textarea:focus { border-color: #0078d4; }
   .ingest-success { color: #107c10; font-size: 13px; margin-top: 6px; }
-
-  .trace-link { font-size: 12px; color: #0078d4; text-decoration: none; margin-top: 8px; display: inline-block; }
-  .trace-link:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 <header>
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="11" r="7" stroke="white" stroke-width="2"/><line x1="16.5" y1="16.5" x2="22" y2="22" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>
   <h1>Singapore Tax Regulations Search</h1>
-  <span>Powered by AO — RAG (retrieval-augmented generation)</span>
+  <span>Powered by AO — Multi-agent RAG (supervisor pattern: research coordinator + retrieval + synthesis)</span>
 </header>
 
 <div class="container">
@@ -135,12 +139,60 @@ function doSearch() {
       document.getElementById('stepsCard').style.display = '';
     }
 
-    if (msg.type === 'step') {
-      const steps = document.getElementById('steps');
+    // ── Research coordinator (supervisor) routing decision ──
+    if (msg.type === 'planner_step') {
+      const nextBadge = msg.next === 'FINISH'
+        ? `<span style="background:#dff6dd;color:#0b6f0b;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">✓ FINISH</span>`
+        : `<span style="background:#deecf9;color:#004578;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">→ ${escapeHtml(msg.next)}</span>`;
+      let inner = `<span class="step-icon">🧭</span><div><strong>${escapeHtml(msg.label)}</strong>&nbsp;${nextBadge}`;
+      if (msg.reasoning) {
+        inner += `<details class="reasoning"><summary>Coordinator reasoning (click to expand)…</summary><pre>${escapeHtml(msg.reasoning)}</pre></details>`;
+      }
+      inner += '</div>';
       const div = document.createElement('div');
-      div.className = 'step' + (msg.node.startsWith('tool:') ? ' tool' : '');
-      div.innerHTML = `<div class="step-dot"></div><span>${msg.label || msg.node}</span>`;
-      steps.appendChild(div);
+      div.className = 'step supervisor';
+      div.innerHTML = inner;
+      document.getElementById('steps').appendChild(div);
+    }
+
+    // ── Tool call (vector_search) step card ──
+    if (msg.type === 'tool_step') {
+      const args = msg.args || {};
+      const argStr = Object.entries(args).map(([k,v]) => `${k}: "${escapeHtml(String(v))}"`).join(' | ');
+      let inner = `<span class="step-icon">🔍</span><div>
+        <strong>${escapeHtml(msg.label)}</strong>
+        <br><code style="font-size:11px;color:#4a154b;background:#f9f0ff;padding:1px 4px;border-radius:2px;">${escapeHtml(msg.tool)}(${argStr})</code>`;
+      if (msg.result) {
+        inner += `<details class="reasoning"><summary>Retrieved content (click to expand)…</summary><pre>${escapeHtml(msg.result)}</pre></details>`;
+      }
+      inner += '</div>';
+      const div = document.createElement('div');
+      div.className = 'step tool';
+      div.innerHTML = inner;
+      document.getElementById('steps').appendChild(div);
+    }
+
+    // ── Agent (retrieval / synthesis) step card ──
+    if (msg.type === 'agent_step') {
+      const isRetrieval = msg.node === 'retrieval_agent';
+      const icon = isRetrieval ? '📚' : '✍️';
+      let inner = `<span class="step-icon">${icon}</span><div><strong>${escapeHtml(msg.label)}</strong>`;
+      if (msg.response) {
+        inner += `<details class="reasoning"><summary>Agent output (click to expand)…</summary><pre>${escapeHtml(msg.response)}</pre></details>`;
+      }
+      inner += '</div>';
+      const div = document.createElement('div');
+      div.className = `step${isRetrieval ? ' tool' : ' agent'}`;
+      div.innerHTML = inner;
+      document.getElementById('steps').appendChild(div);
+    }
+
+    // ── Legacy step fallback ──
+    if (msg.type === 'step') {
+      const div = document.createElement('div');
+      div.className = 'step' + (msg.node && msg.node.startsWith('tool:') ? ' tool' : '');
+      div.innerHTML = `<span class="step-icon">⚙️</span><span>${escapeHtml(msg.label || msg.node)}</span>`;
+      document.getElementById('steps').appendChild(div);
     }
 
     if (msg.type === 'token') {

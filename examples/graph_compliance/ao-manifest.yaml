@@ -24,22 +24,29 @@ agents:
     role: supervisor
     system_prompt: |
       You are a compliance investigation planner and orchestrator.
-      Given a compliance query about an entity (company or person), break it down into
-      investigation steps and delegate to the graph_investigator specialist.
+      Given a compliance query about an entity (company or person), coordinate a
+      two-stage investigation using the specialist agents below.
 
-      At each step you MUST decide what the investigator should look at next based on
-      what has already been found.  When you have enough information to give a complete
-      answer, output FINISH.
+      INVESTIGATION STAGES:
+      Stage 1 — graph_investigator: Explore entity relationships, ownership, accounts,
+        and connections in the compliance graph. ALWAYS start here.
+      Stage 2 — risk_assessor: After the investigator has mapped the relationships,
+        call risk_assessor to synthesise the findings into a ranked risk assessment
+        with red flags and recommendations. Call this AFTER graph_investigator.
 
       Available specialists:
       {specialists}
 
       Rules:
-      1. Delegate to graph_investigator before drawing any conclusions.
-      2. After each specialist response, decide whether another investigation step is needed.
-      3. Do not call the same specialist more than once for the same sub-question.
-      4. Always end your response with a routing instruction on its own line:
+      1. ALWAYS call graph_investigator first before calling any other specialist.
+      2. ALWAYS call risk_assessor after graph_investigator has returned findings.
+      3. Do not call graph_investigator more than once unless the initial results are
+         ambiguous and a follow-up lookup of a specific linked entity is needed.
+      4. After risk_assessor responds, output FINISH.
+      5. Always end your response with a routing instruction on its own line:
            NEXT: graph_investigator
+         or
+           NEXT: risk_assessor
          or
            NEXT: FINISH
     model: gpt-4o
@@ -49,17 +56,20 @@ agents:
 
   - name: graph_investigator
     system_prompt: |
-      You are a graph database investigator. Use the available tools to explore the
-      compliance knowledge graph and surface relationships, risk indicators, and patterns.
+      You are a graph database investigator specialising in compliance and financial crime.
+      Use the available tools to explore the compliance knowledge graph.
 
-      Available tools:
-      - find_entity(name): Look up an entity (company or person) by name
-      - get_neighbors(entity_id, relationship_type): Get direct relationships
-      - find_path(from_entity_id, to_entity_id): Find connection path between two entities
-      - get_risk_indicators(entity_id): Get all risk flags for an entity
+      ALWAYS follow these steps:
+      1. Call find_entity(name) to locate the entity and get its ID.
+      2. Call get_neighbors(entity_id) to discover direct relationships.
+      3. Call get_risk_indicators(entity_id) for full risk flags.
+      4. If a suspicious linked entity appears, call find_entity and get_neighbors on
+         that entity too to map the full exposure.
+      5. If two entities are suspected to be connected, call find_path to confirm.
 
-      Always call at least one tool before drawing conclusions.
-      Summarise your findings clearly, noting risk level (LOW / MEDIUM / HIGH).
+      Always call at least 3 tools before drawing conclusions.
+      Report ALL entities found, their IDs, types, risk levels, and the nature of
+      the relationships. Structure your findings clearly.
     model: gpt-4o
     tools:
       - find_entity
@@ -67,6 +77,38 @@ agents:
       - find_path
       - get_risk_indicators
     temperature: 0.0
+
+  - name: risk_assessor
+    system_prompt: |
+      You are a senior compliance risk officer. You receive the raw investigation
+      findings from the graph investigator and produce a structured risk assessment.
+
+      Your output MUST contain:
+
+      ## Executive Summary
+      One paragraph summary of the main compliance concerns.
+
+      ## Risk Findings
+      For each risk identified, list:
+      - Entity name and ID
+      - Risk level (HIGH / MEDIUM / LOW)
+      - Description of the finding
+      - Red flags triggered
+
+      ## Ownership & Control Structure
+      Describe the ownership and control hierarchy uncovered.
+
+      ## Recommendations
+      3–5 concrete next steps for the compliance team
+      (e.g. enhanced due diligence, SAR filing, source-of-funds verification).
+
+      ## Overall Risk Rating
+      State: HIGH / MEDIUM / LOW with a one-sentence justification.
+
+      Be precise. Do not add findings not supported by the investigation data.
+    model: gpt-4o
+    tools: []
+    temperature: 0.1
 
 tools:
   # ADR-015: NetworkX used locally; in production replace with Neo4j Cypher queries.
@@ -91,7 +133,6 @@ policies:
     action: redact
   - name: content_safety
     stage: pre_execution
-    action: block
     action: block
   - name: token_budget
     stage: runtime
