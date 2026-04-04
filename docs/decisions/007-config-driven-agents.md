@@ -98,3 +98,69 @@ business metadata from the manifest's `trace_metadata` per-agent config.
   directly as an escape hatch.
 - `hitl_condition` uses Python `eval()` against a restricted namespace; acceptable for
   developer-authored manifests. Future hardening: replace with a simple DSL or enum.
+
+---
+
+## Option B: AgentOps — Centralised Agent Registry and Lifecycle Platform
+
+> Status: **Proposed** (not yet implemented). Complements Option A (current approach).
+
+### Motivation
+As the number of DSAI apps and agents grows, a self-service pattern (each app owns its manifest) creates visibility and governance gaps:
+- No central inventory of what agents exist, what tools they call, or what policies apply.
+- No standardised onboarding workflow for new agent authors.
+- Evals and red-team tests are scattered across repos with no aggregated quality view.
+
+### Concept: AgentOps Platform
+A lightweight agent registry + ops workflow layer built on top of the AO platform API.
+
+**Agent lifecycle stages:**
+```
+Draft → Review → Staging → Production → Deprecated
+```
+
+**Onboarding flow for a new agent (DSAI app developer):**
+1. Submit `ao-manifest.yaml` + eval cases + red-team prompts to AO platform via API or PR.
+2. AO platform runs automated quality gates (deepeval metrics, PromptFoo red-team).
+3. Approved manifest is registered in the agent registry with a unique `agent_id`.
+4. Deployment is triggered automatically (ACA revision update) with the new manifest.
+5. Live telemetry (Langfuse traces, policy violations, tool call rates) is surfaced per agent.
+
+**Agent registry entry (key fields):**
+```yaml
+agent_id: email-assistant/assessment_relief/v3
+app: email-assistant
+version: 3
+manifest_ref: sha256:abc123
+owner: dsai-team-tax
+tools: [lookup_taxpayer, retrieve_past_emails]
+policies: [content_safety, pii_filter, llm_judge]
+eval_thresholds:
+  faithfulness: 0.7
+  answer_relevancy: 0.7
+redteam_coverage: [LLM01, LLM02, LLM06, LLM08]
+status: production
+promoted_at: 2026-04-01T00:00:00Z
+```
+
+**LLMSecOps integration:**
+- Every agent version has a security posture score (OWASP LLM Top-10 coverage %).
+- Policy violations and red-team failures are tracked per agent, not just per app.
+- Agents with declining quality scores or policy breach spikes are auto-flagged for review.
+
+### Comparison: Option A vs Option B
+
+| Concern | Option A (current) | Option B (AgentOps) |
+|---|---|---|
+| Agent inventory | None, scattered across repos | Central registry with lifecycle state |
+| Eval ownership | Each app repo | AO platform runs on behalf of app |
+| Red-team | PromptFoo in app repo | AO platform runs centrally per agent version |
+| Onboarding | Manual deploy | Self-service API submission + automated gates |
+| Governance | Git PR review | Automated quality gate + human approval stage |
+| Complexity | Low | Higher — requires registry API + promotion workflow |
+
+### When to consider Option B
+- More than ~5 distinct DSAI apps each deploying agents independently.
+- Compliance requirement for a central audit trail of agent changes.
+- Multiple teams deploying to the same AO platform and needing isolation.
+
