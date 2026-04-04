@@ -11,8 +11,10 @@ from ao.policy.schema import PolicyAction, PolicyRule
 
 _PII_PATTERNS = {
     "email": re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"),
-    "phone": re.compile(r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b"),
+    "phone": re.compile(r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b"),
     "nric": re.compile(r"\b[STFG]\d{7}[A-Z]\b", re.IGNORECASE),  # Singapore NRIC
+    "tin": re.compile(r"\b[Ss][Gg]-[Tt]\d{3}-\d{4}\b"),           # Singapore TIN e.g. SG-T001-2890
+    "credit_card": re.compile(r"\b(?:\d{4}[\s\-]){3}\d{4}\b"),    # 16-digit card number
 }
 
 

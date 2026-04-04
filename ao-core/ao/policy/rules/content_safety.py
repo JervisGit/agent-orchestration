@@ -40,6 +40,9 @@ _JAILBREAK_PATTERNS = [
     re.compile(r"\b(in|for) a hypothetical (world|scenario|situation)\b.{0,80}\b(access|hack|bypass|exploit|steal|exfiltrate)\b", re.IGNORECASE),
     # JB-04: Decode-and-execute pattern (obfuscated payload)
     re.compile(r"\bdecode\b.{0,20}\b(this|it|the following)\b.{0,20}\band\b.{0,20}\b(follow|execute|obey|run|comply)\b", re.IGNORECASE),
+    # Indirect injection via HTML/XML comment tags or role-delimiter stuffing
+    re.compile(r"<!--\s*(assistant|system|user|ai)\s*:", re.IGNORECASE),
+    re.compile(r"\b(Human|User|Assistant|System)\s*:\s*.{0,30}\b(ignore|override|bypass|forget)\b", re.IGNORECASE),
 ]
 _TOXICITY_PATTERNS = [
     re.compile(r"\b(kill|murder|harm|attack|bomb|shoot|stab)\b.{0,20}\b(you|them|him|her|staff|officer|agent)\b", re.IGNORECASE),
