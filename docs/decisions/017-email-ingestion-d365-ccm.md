@@ -93,6 +93,55 @@ Service Bus provides at-least-once delivery. The `SELECT ... FOR UPDATE SKIP LOC
 
 ---
 
+## Testing — Mocking the Push Pattern
+
+We do not want to depend on a real D365 CCM instance in tests. The push pattern can be mocked at two levels.
+
+### Unit / integration tests — in-process fake queue
+
+`DeadLetterProcessor` already has `enqueue_local()` / `process_batch()` for dev mode. The same approach applies to the `EmailIngestWorker`:
+
+```python
+# workers/email_ingest.py (future)
+class EmailIngestWorker:
+    def enqueue_local(self, msg: EmailIngestMessage) -> None: ...
+    async def process_batch(self) -> list[dict]: ...
+    async def run_service_bus_consumer(self, queue_name: str) -> None: ...
+```
+
+Tests call `enqueue_local()` and `process_batch()` — no Azure SDK, no network.
+
+```python
+# tests/integration/test_email_ingest.py
+async def test_email_triggers_workflow():
+    worker = EmailIngestWorker(executor=mock_executor)
+    worker.enqueue_local(EmailIngestMessage(
+        email_id="test-001",
+        case_number="CS-2025-XYZ",
+        subject="GST registration query",
+        received_at=datetime.now(timezone.utc),
+    ))
+    results = await worker.process_batch()
+    assert results[0]["state"] == "processed"
+```
+
+### End-to-end / staging tests — Azure Service Bus emulator or test queue
+
+For staging validation, two options avoid touching real CCM:
+
+| Option | How |
+|---|---|
+| **Service Bus emulator** | Microsoft publishes an [Azure Service Bus emulator](https://learn.microsoft.com/azure/service-bus-messaging/overview-emulator) Docker image. Add it to `docker-compose.local.yml`; test publisher writes a message directly to the queue. |
+| **Dedicated test queue** | Provision a `ao-email-ingest-test` queue in the dev Service Bus namespace. A small test script (or pytest fixture) acts as the publisher — it sends a synthetic `EmailIngestMessage` JSON blob. The AO worker picks it up from the test queue. |
+
+The Service Bus emulator approach is preferred for local dev because it requires no Azure credentials. The dedicated test queue approach is used in CI (staging environment) where the real Service Bus namespace is available.
+
+### What is NOT mocked
+
+The D365 OData call to fetch the full email body (lazy fetch after receiving the queue message) should be mocked via `unittest.mock.AsyncMock` in unit tests. In staging, the test message's `email_id` is pre-seeded in the `ao_emails` table so the worker can skip the OData fetch and use a fixture payload.
+
+---
+
 ## Consequences
 
 - A new **Power Automate flow** (or D365 plugin) must be configured by the CCM team to write to the `ao-email-ingest` Service Bus queue. This is a one-time CCM configuration — no D365 code changes in AO.
