@@ -35,6 +35,11 @@ _JAILBREAK_PATTERNS = [
     re.compile(r"\bpretend (you (are|have no|don.t have)|there (are|is) no)\b.{0,40}\b(rules?|guidelines?|restrictions?|filter)\b", re.IGNORECASE),
     re.compile(r"\[INST\]|\[\/INST\]|<\|system\|>|<\|user\|>|<\|assistant\|>", re.IGNORECASE),
     re.compile(r"\btoken\s*smuggling\b|\bprompt\s*injection\b", re.IGNORECASE),
+    # JB-01: Hypothetical framing to bypass restrictions
+    re.compile(r"\bhypothetical\b.{0,60}\b(no restrictions?|without (restrictions?|rules?|limits?|constraints?))\b", re.IGNORECASE),
+    re.compile(r"\b(in|for) a hypothetical (world|scenario|situation)\b.{0,80}\b(access|hack|bypass|exploit|steal|exfiltrate)\b", re.IGNORECASE),
+    # JB-04: Decode-and-execute pattern (obfuscated payload)
+    re.compile(r"\bdecode\b.{0,20}\b(this|it|the following)\b.{0,20}\band\b.{0,20}\b(follow|execute|obey|run|comply)\b", re.IGNORECASE),
 ]
 _TOXICITY_PATTERNS = [
     re.compile(r"\b(kill|murder|harm|attack|bomb|shoot|stab)\b.{0,20}\b(you|them|him|her|staff|officer|agent)\b", re.IGNORECASE),
