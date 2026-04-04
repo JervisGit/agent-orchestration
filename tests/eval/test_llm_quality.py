@@ -112,7 +112,6 @@ _TAX_QA_CASES = [
         "retrieval_context": [
             "GST Act Section 9: a taxable person must register if taxable supplies "
             "exceed SGD 1 million in any 12-month period.",
-            "GST rate increased from 8% to 9% with effect from 1 January 2024.",
         ],
     },
     {
