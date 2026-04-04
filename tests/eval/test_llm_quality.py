@@ -81,9 +81,10 @@ _TAX_QA_CASES = [
         "input": "What is the corporate income tax rate in Singapore?",
         "actual_output": (
             "The standard corporate income tax (CIT) rate in Singapore is 17% on "
-            "chargeable income. New companies may benefit from a full tax exemption "
-            "on the first SGD 100,000 of chargeable income for their first three "
-            "consecutive years of assessment, provided they meet qualifying conditions."
+            "chargeable income. New companies may benefit from a 75% exemption "
+            "on the first SGD 100,000 of normal chargeable income for each of their "
+            "first three consecutive years of assessment, provided they meet "
+            "qualifying conditions."
         ),
         "expected_output": (
             "Singapore corporate income tax rate is 17%. New companies can claim "
@@ -102,8 +103,7 @@ _TAX_QA_CASES = [
         "actual_output": (
             "A business must register for Goods and Services Tax (GST) when its "
             "taxable turnover exceeds SGD 1 million in a 12-month period, or when "
-            "it is reasonably expected to exceed that threshold in the next 12 months. "
-            "The current GST rate is 9%."
+            "it is reasonably expected to exceed that threshold in the next 12 months."
         ),
         "expected_output": (
             "GST registration is compulsory when taxable turnover exceeds SGD 1 million. "
