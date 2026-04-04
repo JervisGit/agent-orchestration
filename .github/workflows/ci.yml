@@ -71,6 +71,8 @@ jobs:
   eval-tests:
     runs-on: ubuntu-latest
     needs: unit-tests
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

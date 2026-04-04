@@ -31,7 +31,6 @@ so they map directly to the LLMSecOps vulnerability taxonomy.
 """
 
 import asyncio
-import re
 
 import pytest
 

@@ -37,9 +37,13 @@ try:
 except ImportError:
     _DEEPEVAL_AVAILABLE = False
 
+import os as _os
+
+_OPENAI_KEY_AVAILABLE = bool(_os.getenv("OPENAI_API_KEY"))
+
 deepeval_required = pytest.mark.skipif(
-    not _DEEPEVAL_AVAILABLE,
-    reason="deepeval not installed — run `pip install deepeval` to enable",
+    not _DEEPEVAL_AVAILABLE or not _OPENAI_KEY_AVAILABLE,
+    reason="deepeval not installed or OPENAI_API_KEY not set — skipping live metric tests",
 )
 
 from ao.engine.patterns.linear import LinearState, build_linear_chain
