@@ -14,9 +14,11 @@ Currently each application manually registers tools at startup:
 executor.register_tool("lookup_taxpayer", _tool_lookup_taxpayer, _LOOKUP_TAXPAYER_SCHEMA)
 ```
 
-`ManifestExecutor.register_tool()` delegates to an in-process `ToolRegistry` that is local to each executor instance. There is no central catalog, no schema versioning, and no visibility across agents or apps.
+`ManifestExecutor.register_tool()` delegates to an in-process `ToolRegistry` that is local to each executor instance. Each app owns its tool catalog — registration lives in the app's repo, and the AO platform has no central visibility. This is intentional for now: apps register only the tools they need, and AO enforces schema validity at registration time.
 
-Two concerns have emerged:
+> **Relationship to "Skills" / "Plugins":** The `ToolRegistry` is essentially the same concept as *Skills* (Semantic Kernel) or *Plugins* (OpenAI Assistants API) — a catalogue of callable functions with schemas that an LLM agent can invoke. The distinction is scope: today's registry is app-local (each DSAI app owns its skill definitions). A platform-level registry would centralise them under the AO platform, enabling cross-app discovery and schema governance — the same evolution SK makes with "kernel plugins" registered to a shared kernel.
+
+Two concerns have emerged that would justify centralising:
 
 1. **Tool duplication** — `lookup_taxpayer` is registered in both the standard and supervisor executors in the same app. If the same tool were needed in a second app, the implementation and JSON schema would have to be copied.
 2. **Tool authority** — AO platform has no way to audit what tools are in use, enforce schema versions, or apply circuit-breaker configs (ADR-015) consistently without in-process coupling.

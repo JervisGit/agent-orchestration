@@ -254,3 +254,94 @@ builds `f"{APIM_TAXPAYER_URL}/{tin}"`. If the APIM path changes, only Terraform 
 - [ao-core/ao/engine/manifest_executor.py](../../ao-core/ao/engine/manifest_executor.py) — `_resolve_identity()`
 - [ao-platform/api/identity.py](../../ao-platform/api/identity.py) — FastAPI identity dependency
 - [tests/unit/test_tools.py](../../tests/unit/test_tools.py) — `TestToolExecutorIdentity` suite
+
+---
+
+## Addendum: Logical Identity via APIM Named Values (`X-Agent-ID`)
+
+### Problem
+
+In organisations where provisioning a new Azure UAMI or App Registration requires a long approval process, the per-agent UAMI isolation model (described above) creates a barrier to onboarding new agents. An alternative that provides **per-agent access control without new Azure identities** is feasible using APIM's policy engine.
+
+### Pattern — "X-Agent-ID" Virtual Identity
+
+The Container App retains its single approved UAMI. Each sub-agent in `ManifestExecutor` attaches a `X-Agent-ID` custom header containing the agent's manifest name when making outbound APIM calls. APIM enforces a permissions map stored as a **Named Value**.
+
+```
+Agent Pod (ACA)
+  └─ ManifestExecutor (agent_name="Researcher", from manifest)
+       └─ HTTP POST /search
+          X-Agent-ID: Researcher          ← injected by ManifestExecutor, never from user input
+          Authorization: Bearer <UAMI token>
+
+APIM
+  ├─ validate-jwt (Layer 1: verify UAMI token — unchanged from ADR-013)
+  └─ X-Agent-ID policy (Layer 2: check agent against Named Value map)
+       AgentPermissions Named Value:
+         { "Researcher": ["/search", "/read-docs"],
+           "Writer":     ["/publish"],
+           "Coder":      ["/git-push", "/debug"] }
+       → 403 if agent not in map or path not in allowed list
+```
+
+### APIM policy fragment
+
+```xml
+<inbound>
+    <base />
+    <!-- Layer 1: JWT validation (unchanged) -->
+    <validate-jwt failed-validation-httpcode="401">
+      <audiences><audience>{{apim-client-id}}</audience></audiences>
+    </validate-jwt>
+
+    <!-- Layer 2: Logical agent identity -->
+    <set-variable name="agentId"
+                  value="@(context.Request.Headers.GetValueOrDefault("X-Agent-ID","Unknown"))" />
+    <set-variable name="permissions"
+                  value="@(JObject.Parse("{{AgentPermissions}}"))" />
+    <choose>
+        <when condition="@{
+            var id    = (string)context.Variables["agentId"];
+            var perms = (JObject)context.Variables["permissions"];
+            var path  = context.Request.Url.Path.ToLower();
+            if (perms.ContainsKey(id)) {
+                return !perms[id].ToObject<List<string>>()
+                                 .Any(p => path.StartsWith(p.ToLower()));
+            }
+            return true; // unknown agent → block
+        }">
+            <return-response>
+                <set-status code="403" reason="Forbidden" />
+                <set-body>@("Access denied for Agent: " + (string)context.Variables["agentId"])</set-body>
+            </return-response>
+        </when>
+    </choose>
+</inbound>
+```
+
+The `AgentPermissions` Named Value is a plain JSON string maintained in APIM. Adding a new agent = update one Named Value — no Terraform, no Azure identity provisioning.
+
+### Is the `X-Agent-ID` header deterministic?
+
+Yes, **provided it is always set by `ManifestExecutor` from the manifest definition, not from user input.**
+
+In the current codebase, all outbound APIM calls originate from tool functions called by `ManifestExecutor`. The agent name is resolved from the manifest step before execution (same `_resolve_identity()` path). `ManifestExecutor` will inject `X-Agent-ID` from `self._manifest.name` (or the active step's agent name) at the HTTP call layer.
+
+**The header MUST never be derived from the incoming chat request or any user-supplied data.** If a user sends `X-Agent-ID: Admin` in their chat message, it must never propagate to the APIM call. `ManifestExecutor` owns the header; user input is never in the header-setting path.
+
+### Comparison with UAMI-per-agent model
+
+| Aspect | UAMI-per-agent (ADR-013 production path) | X-Agent-ID Logical Identity |
+|---|---|---|
+| Cryptographic proof | Yes — JWT signed by Entra | No — header set by code |
+| New Azure IDs needed | Yes (one UAMI per agent) | No |
+| Approval required | Yes (Director/security team) | No — Named Value update |
+| Audit trail | Entra logs + APIM (tied to real identity) | APIM logs (tied to header value) |
+| Forgeable by insider threat? | No (IMDS token is platform-bound) | Only via code modification |
+| Best for | Production, regulated, high-assurance | Dev, constrained orgs, rapid iteration |
+
+### Recommendation
+
+Use **X-Agent-ID + Named Value** as the enforcement mechanism when UAMI provisioning is blocked by approval processes. This is not a replacement for the ADR-013 UAMI model — it is a pragmatic intermediate that delivers per-agent access control today with no infrastructure changes. When per-UAMI isolation is approved, migrate to the production path described above; the two layers are additive (APIM can enforce both simultaneously).
+
+All tool calls that bypass APIM (e.g. direct DB queries) are not covered by this pattern — all agent resource access must route through APIM for the logical identity check to be effective.
