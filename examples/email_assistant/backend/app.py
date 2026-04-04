@@ -457,6 +457,27 @@ _RETRIEVE_PAST_EMAILS_SCHEMA: dict = {
     },
 }
 
+_LOOKUP_TAXPAYER_SCHEMA: dict = {
+    "name": "lookup_taxpayer",
+    "description": (
+        "Look up a taxpayer's record from the database using their Tax Identification "
+        "Number (TIN). Call this when the email contains a TIN (format: SG-TXXX-XXXX) "
+        "and you need taxpayer details such as outstanding balance, penalty count, or "
+        "filing status to respond accurately."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "tin": {
+                "type": "string",
+                "description": "The taxpayer's TIN, e.g. SG-T001-2890",
+                "pattern": "^[Ss][Gg]-[Tt]\\d{3}-\\d{4}$",
+            }
+        },
+        "required": ["tin"],
+    },
+}
+
 # ── Wire executor ────────────────────────────────────────────────────
 # Register lookup_taxpayer as an LLM-callable tool so specialists decide
 # when to fetch taxpayer data rather than forcing a DB hit on every email.
