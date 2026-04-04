@@ -146,3 +146,33 @@ class TestToolExecutorIdentity:
                 executor.execute("nonexistent", self._make_service_identity())
             )
 
+    def test_agent_name_injected_when_param_declared(self):
+        """agent_name flows into the tool fn when it declares the `agent_name` param."""
+        from ao.tools.executor import ToolExecutor
+
+        async def agent_aware_tool(agent_name: str | None = None):
+            return {"calling_agent": agent_name}
+
+        reg = ToolRegistry()
+        reg.register(name="agent_tool", fn=agent_aware_tool, description="Agent-aware")
+        executor = ToolExecutor(reg)
+        result = asyncio.run(
+            executor.execute("agent_tool", self._make_service_identity(), agent_name="filing_extension")
+        )
+        assert result["calling_agent"] == "filing_extension"
+
+    def test_agent_name_not_injected_when_param_absent(self):
+        """Tools without `agent_name` param must not receive it — no TypeError."""
+        from ao.tools.executor import ToolExecutor
+
+        async def plain_tool():
+            return {"ok": True}
+
+        reg = ToolRegistry()
+        reg.register(name="plain_tool", fn=plain_tool, description="No agent param")
+        executor = ToolExecutor(reg)
+        result = asyncio.run(
+            executor.execute("plain_tool", self._make_service_identity(), agent_name="filing_extension")
+        )
+        assert result == {"ok": True}
+

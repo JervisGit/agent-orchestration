@@ -315,7 +315,11 @@ async def node_lookup_taxpayer(state: TaxEmailState) -> dict:
     }
 
 
-async def _tool_lookup_taxpayer(tin: str, identity: IdentityContext | None = None) -> dict:
+async def _tool_lookup_taxpayer(
+    tin: str,
+    identity: IdentityContext | None = None,
+    agent_name: str | None = None,
+) -> dict:
     """Tool callable: look up a taxpayer by TIN.
 
     When APIM_GATEWAY_URL is set the request goes via APIM (production path):
@@ -323,6 +327,8 @@ async def _tool_lookup_taxpayer(tin: str, identity: IdentityContext | None = Non
       - calls GET {APIM_GATEWAY_URL}/agents/taxpayer/{tin}
       - APIM validates the JWT + Agents.TaxpayerLookup role, then forwards
         to this app's own /taxpayer/{tin} endpoint (or a dedicated DSAI API)
+      - X-Agent-ID header carries the calling agent's manifest name so APIM
+        can enforce per-agent path restrictions (ADR-013 logical identity)
 
     When APIM_GATEWAY_URL is not set it falls back to the direct psycopg
     query (local dev with no Azure infrastructure).
@@ -330,10 +336,13 @@ async def _tool_lookup_taxpayer(tin: str, identity: IdentityContext | None = Non
     if APIM_TAXPAYER_URL and identity is not None:
         try:
             token = await _credential_provider.get_token(identity, APIM_SCOPE)
+            apim_headers: dict[str, str] = {"Authorization": f"Bearer {token}"}
+            if agent_name:
+                apim_headers["X-Agent-ID"] = agent_name
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(
                     f"{APIM_TAXPAYER_URL}/{tin}",
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers=apim_headers,
                 )
                 resp.raise_for_status()
                 taxpayer = resp.json()

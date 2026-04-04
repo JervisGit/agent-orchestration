@@ -438,12 +438,15 @@ class ManifestExecutor:
             return msg, {}
 
         try:
-            # Inject identity into tool callables that declare the parameter.
-            # Tools that do not declare `identity` are unaffected.
+            # Inject identity and agent_name into tool callables that declare these
+            # parameters. Tools that do not declare them are unaffected (backward compat).
             import inspect
             call_args = dict(args)
-            if identity is not None and "identity" in inspect.signature(fn).parameters:
+            sig = inspect.signature(fn)
+            if identity is not None and "identity" in sig.parameters:
                 call_args["identity"] = identity
+            if agent_name and "agent_name" in sig.parameters:
+                call_args["agent_name"] = agent_name
             raw = await fn(**call_args) if asyncio.iscoroutinefunction(fn) else fn(**call_args)
             breaker.record_success()
         except Exception as exc:

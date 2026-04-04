@@ -38,6 +38,7 @@ class ToolExecutor:
         tool_name: str,
         identity: IdentityContext,
         args: dict[str, Any] | None = None,
+        agent_name: str | None = None,
     ) -> Any:
         spec = self._registry.get(tool_name)
         if not spec:
@@ -58,11 +59,13 @@ class ToolExecutor:
 
         call_args = dict(args or {})
 
-        # Inject identity only if the tool explicitly declares the parameter —
-        # keeps existing tools unchanged while opt-in tools get the context.
+        # Inject identity and agent_name only if the tool explicitly declares the
+        # parameter — keeps existing tools unchanged while opt-in tools get the context.
         sig = inspect.signature(spec.fn)
         if "identity" in sig.parameters:
             call_args["identity"] = identity
+        if agent_name is not None and "agent_name" in sig.parameters:
+            call_args["agent_name"] = agent_name
 
         import asyncio
 

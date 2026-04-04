@@ -82,6 +82,22 @@ variable "agent_app_roles" {
 
 variable "tags" { type = map(string) }
 
+# Agent-to-path permissions map for the X-Agent-ID logical identity check (ADR-013).
+# Keys are agent manifest names; values are APIM path prefixes the agent is allowed to call.
+# Stored as a APIM Named Value (AgentPermissions) — update without Terraform re-apply once deployed.
+variable "agent_permissions" {
+  type = string
+  default = jsonencode({
+    filing_extension   = ["/agents/taxpayer"]
+    assessment_relief  = ["/agents/taxpayer"]
+    penalty_waiver     = ["/agents/taxpayer"]
+    supervisor         = ["/agents/taxpayer"]
+    rag_search         = ["/agents/search"]
+    graph_compliance   = ["/agents/compliance"]
+  })
+  description = "JSON string mapping agent manifest names to allowed APIM path prefixes."
+}
+
 data "azurerm_client_config" "current" {}
 
 # ── Stable UUIDs for App Role IDs ─────────────────────────────────
@@ -241,6 +257,17 @@ resource "azurerm_api_management_named_value" "apim_client_id" {
   secret              = false
 }
 
+# Agent-to-path permissions map for X-Agent-ID enforcement (ADR-013 logical identity).
+# Update this Named Value directly in APIM to change permissions without a Terraform re-apply.
+resource "azurerm_api_management_named_value" "agent_permissions" {
+  name                = "AgentPermissions"
+  resource_group_name = var.resource_group_name
+  api_management_name = azurerm_api_management.ao.name
+  display_name        = "AgentPermissions"
+  value               = var.agent_permissions
+  secret              = false
+}
+
 # ── AO Agents API ──────────────────────────────────────────────────
 # All DSAI tool operations live under path /agents.
 # API-level policy: validate JWT audience (applies to every operation).
@@ -336,6 +363,29 @@ resource "azurerm_api_management_api_operation_policy" "taxpayer_lookup" {
             </claim>
           </required-claims>
         </validate-jwt>
+        <!-- Step 3 (ADR-013 logical identity): check X-Agent-ID against AgentPermissions map.
+             X-Agent-ID is injected by ManifestExecutor from the manifest agent name — never from user input. -->
+        <set-variable name="agentId"
+                      value="@(context.Request.Headers.GetValueOrDefault(&quot;X-Agent-ID&quot;, &quot;Unknown&quot;))" />
+        <set-variable name="permissions"
+                      value="@(JObject.Parse(&quot;{{AgentPermissions}}&quot;))" />
+        <choose>
+          <when condition="@{
+              var id    = (string)context.Variables[&quot;agentId&quot;];
+              var perms = (JObject)context.Variables[&quot;permissions&quot;];
+              var path  = context.Request.Url.Path.ToLower();
+              if (perms.ContainsKey(id)) {
+                  return !perms[id].ToObject&lt;List&lt;string&gt;&gt;()
+                                   .Any(p =&gt; path.StartsWith(p.ToLower()));
+              }
+              return true; // unknown agent ID — block
+          }">
+            <return-response>
+              <set-status code="403" reason="Forbidden" />
+              <set-body>@(&quot;Access denied for Agent: &quot; + (string)context.Variables[&quot;agentId&quot;])</set-body>
+            </return-response>
+          </when>
+        </choose>
         <set-backend-service backend-id="taxpayer-api-backend" />
       </inbound>
       <backend><base /></backend>
