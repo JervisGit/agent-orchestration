@@ -71,18 +71,20 @@
   .card h3 { font-size: 13px; font-weight: 600; color: #605e5c; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
 
   .steps { display: flex; flex-direction: column; gap: 4px; }
-  .step { background: #faf9f8; border-left: 3px solid #0078d4; font-size: 13px; border-radius: 0 2px 2px 0; overflow: hidden; }
+  .step { display: flex; align-items: flex-start; gap: 10px; padding: 6px 10px; background: #faf9f8; border-left: 3px solid #0078d4; font-size: 13px; border-radius: 0 2px 2px 0; }
   .step.tool      { border-color: #8764b8; }
-  .step.supervisor { border-color: #0078d4; }
-  .step-header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; user-select: none; }
-  .step-header:hover { background: #f0eeec; }
-  .step-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; color: #0078d4; }
-  .step.tool .step-dot { color: #8764b8; }
-  .step-body { padding: 0 10px 8px 24px; }
-  .step.collapsed .step-body { display: none; }
+  .step.supervisor { border-color: #0078d4; font-style: italic; }
+  .step-dot { width: 6px; height: 6px; border-radius: 50%; background: #0078d4; flex-shrink: 0; margin-top: 4px; }
+  .step.tool .step-dot { background: #8764b8; }
   details.reasoning { margin-top: 4px; font-size: 12px; }
   details.reasoning summary { cursor: pointer; color: #605e5c; }
   details.reasoning pre { background: #f8f8f8; padding: 8px; border-radius: 2px; margin-top: 4px; white-space: pre-wrap; font-family: 'Cascadia Code', Consolas, monospace; font-size: 11px; color: #444; }
+  .workflow-summary { border: 1px solid #e1dfdd; border-radius: 4px; margin-bottom: 0; overflow: hidden; }
+  .workflow-summary > summary { padding: 8px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #605e5c; cursor: pointer; user-select: none; list-style: none; display: flex; align-items: center; gap: 6px; }
+  .workflow-summary > summary::-webkit-details-marker { display: none; }
+  .workflow-summary > summary::before { content: '\25B6'; font-size: 9px; transition: transform .2s; }
+  .workflow-summary[open] > summary::before { transform: rotate(90deg); }
+  .workflow-summary > .workflow-steps-inner { border-top: 1px solid #e1dfdd; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
 
   .report-box { font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
   .cursor { display: inline-block; width: 2px; height: 1em; background: #0078d4; animation: blink 0.8s steps(1) infinite; vertical-align: text-bottom; }
@@ -173,10 +175,11 @@
     <div id="error" class="error-box" style="display:none;"></div>
 
     <div id="stepsCard" class="card" style="display:none;">
-      <h3 style="display:flex;align-items:center;justify-content:space-between;">Investigation Workflow
-        <button id="collapseToggleBtn" onclick="toggleAllSteps()" style="font-size:11px;font-weight:normal;background:#f3f2f1;border:1px solid #e1dfdd;border-radius:2px;padding:2px 8px;cursor:pointer;text-transform:none;">Collapse all</button>
-      </h3>
-      <div class="steps" id="steps"></div>
+      <h3>Investigation Workflow</h3>
+      <details id="workflowDetails" class="workflow-summary" open>
+        <summary id="workflowSummary">Steps</summary>
+        <div class="workflow-steps-inner" id="steps"></div>
+      </details>
     </div>
 
     <div id="reportCard" class="card" style="display:none;">
@@ -226,40 +229,31 @@ function setQuery(text) {
 
 let currentES = null;
 let _lastStepEl = null;
+let _stepCount = 0;
 
-function _collapseLastStep() {
-  if (_lastStepEl) _lastStepEl.classList.add('collapsed');
+function _updateWorkflowSummary() {
+  const s = document.getElementById('workflowSummary');
+  if (s) s.textContent = `Investigation Workflow \u2014 ${_stepCount} step${_stepCount !== 1 ? 's' : ''}`;
 }
 
-function _collapseAllSteps() {
-  document.querySelectorAll('#steps .step').forEach(s => s.classList.add('collapsed'));
-  const btn = document.getElementById('collapseToggleBtn');
-  if (btn) btn.textContent = 'Expand all';
-}
-
-function toggleAllSteps() {
-  const allCollapsed = [...document.querySelectorAll('#steps .step')].every(s => s.classList.contains('collapsed'));
-  if (allCollapsed) {
-    document.querySelectorAll('#steps .step').forEach(s => s.classList.remove('collapsed'));
-    const btn = document.getElementById('collapseToggleBtn');
-    if (btn) btn.textContent = 'Collapse all';
-  } else {
-    _collapseAllSteps();
-  }
+function _collapseWorkflow() {
+  const d = document.getElementById('workflowDetails');
+  if (d) d.removeAttribute('open');
 }
 
 function _makeStep(className, headerLabel, badgeHtml, bodyHtml) {
-  _collapseLastStep();
   const div = document.createElement('div');
   div.className = 'step ' + className;
-  div.innerHTML =
-    `<div class="step-header" onclick="this.parentElement.classList.toggle('collapsed')">` +
-      `<span class="step-dot"></span>` +
-      `<strong>${headerLabel}</strong>` +
-      (badgeHtml ? `&nbsp;${badgeHtml}` : '') +
-    `</div>` +
-    `<div class="step-body">${bodyHtml}</div>`;
+  let inner = `<div style="display:flex;align-items:flex-start;gap:10px;width:100%;">` +
+    `<span class="step-dot" style="margin-top:4px;flex-shrink:0;"></span><div style="flex:1;">` +
+    `<strong>${headerLabel}</strong>` +
+    (badgeHtml ? `&nbsp;${badgeHtml}` : '') +
+    (bodyHtml ? bodyHtml : '') +
+    `</div></div>`;
+  div.innerHTML = inner;
   document.getElementById('steps').appendChild(div);
+  _stepCount++;
+  _updateWorkflowSummary();
   _lastStepEl = div;
   return div;
 }
@@ -277,6 +271,10 @@ function doInvestigate() {
   document.getElementById('traceLink').style.display = 'none';
   document.getElementById('investigateBtn').disabled = true;
   _lastStepEl = null;
+  _stepCount = 0;
+  const wd = document.getElementById('workflowDetails');
+  if (wd) wd.setAttribute('open', '');
+  _updateWorkflowSummary();
 
   let reportBuf = '';
   let streaming = false;
@@ -348,7 +346,8 @@ function doInvestigate() {
     }
 
     if (msg.type === 'complete') {
-      _collapseAllSteps();
+      _updateWorkflowSummary();
+      _collapseWorkflow();
       document.getElementById('reportCard').style.display = '';
       document.getElementById('reportText').textContent = msg.result.report;
       if (msg.result.langfuse_url) {

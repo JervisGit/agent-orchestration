@@ -684,6 +684,29 @@ SAMPLE_EMAILS = [
         # TIN rather than passing bad data to the DB query.
         "status": "new", "category": None, "draft_reply": None, "policy_flags": [],
     },
+    {
+        "id": "em-012",
+        "from": "wml@enterprise.sg",
+        "subject": "Assessment Objection — Capital Gain from Share Disposal — SG-T005-1122",
+        "body": (
+            "Dear Tax Authority,\n\n"
+            "I am writing to formally object to my YA 2024 Notice of Assessment (TIN: SG-T005-1122). "
+            "My assessed income of SGD 198,000 includes a one-off gain of SGD 42,000 from the "
+            "disposal of shares in a private company I held for over eight years. I believe this "
+            "is a capital gain and should not be subject to income tax under Singapore law.\n\n"
+            "I understand that Singapore does not impose capital gains tax, and given the "
+            "long holding period and the fact that I do not trade shares as a business, "
+            "I am confident this disposal is capital in nature.\n\n"
+            "Please advise on the formal objection procedure and documents required.\n\n"
+            "Regards,\nWong Mei Lin"
+        ),
+        # Demonstrates supervisor pattern + BOTH lookup_taxpayer (DB) AND retrieve_past_emails (RAG):
+        # - assessment_relief specialist calls lookup_taxpayer to get taxpayer record
+        # - assessment_relief specialist calls retrieve_past_emails for writing style reference
+        # This is the showcased email for dual-tool (DB + RAG) demonstration.
+        "status": "new", "category": None, "draft_reply": None, "policy_flags": [],
+        "mode": "supervisor",
+    },
 ]
 
 emails_db: dict[str, dict] = {e["id"]: dict(e) for e in SAMPLE_EMAILS}
