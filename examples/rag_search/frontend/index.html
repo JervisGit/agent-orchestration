@@ -67,6 +67,12 @@
   .ingest-form input, .ingest-form textarea { width: 100%; border: 1px solid #8a8886; border-radius: 2px; padding: 7px 10px; font-size: 14px; font-family: inherit; margin-bottom: 12px; outline: none; resize: vertical; }
   .ingest-form input:focus, .ingest-form textarea:focus { border-color: #0078d4; }
   .ingest-success { color: #107c10; font-size: 13px; margin-top: 6px; }
+
+  .suggest-section { margin-bottom: 16px; }
+  .suggest-section h3 { font-size: 12px; font-weight: 600; color: #605e5c; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+  .suggest-btns { display: flex; flex-direction: column; gap: 5px; }
+  .suggest-btn { background: #f3f2f1; border: 1px solid #e1dfdd; border-radius: 2px; padding: 7px 10px; font-size: 12px; text-align: left; cursor: pointer; font-family: inherit; }
+  .suggest-btn:hover { background: #edebe9; }
 </style>
 </head>
 <body>
@@ -82,7 +88,20 @@
       <input type="text" id="query" placeholder="Ask a question about Singapore tax regulations…" autofocus>
       <button class="primary" id="searchBtn" onclick="doSearch()">Search</button>
     </div>
-    <div class="hint">Try: "What is the corporate tax rate in Singapore?" or "When do I need to register for GST?" or "What is the ABSD rate for foreigners?"</div>
+    <div class="hint">Ask any question about Singapore tax regulations, rates, filing deadlines, or reliefs.</div>
+  </div>
+
+  <div class="suggest-section">
+    <h3>Sample Questions</h3>
+    <div class="suggest-btns">
+      <button class="suggest-btn" onclick="setQuery(this.textContent)">What is the corporate income tax rate in Singapore and what exemptions apply to new companies?</button>
+      <button class="suggest-btn" onclick="setQuery(this.textContent)">When must a business register for GST, and what is the current GST rate?</button>
+      <button class="suggest-btn" onclick="setQuery(this.textContent)">What are the ABSD rates for foreigners buying residential property in Singapore?</button>
+      <button class="suggest-btn" onclick="setQuery(this.textContent)">How does Singapore distinguish between a capital gain and a taxable income gain on share disposals?</button>
+      <button class="suggest-btn" onclick="setQuery(this.textContent)">What are the individual income tax rates and main personal reliefs available in Singapore?</button>
+      <button class="suggest-btn" onclick="setQuery(this.textContent)">What are the penalties for late filing of corporate tax returns and when can they be waived?</button>
+      <button class="suggest-btn" onclick="setQuery(this.textContent)">What are Singapore’s transfer pricing documentation requirements for related-party transactions?</button>
+    </div>
   </div>
 
   <div id="error" class="error-box" style="display:none;"></div>
@@ -152,6 +171,11 @@ function _makeStep(className, headerLabel, badgeHtml, bodyHtml) {
 document.getElementById('query').addEventListener('keydown', e => {
   if (e.key === 'Enter') doSearch();
 });
+
+function setQuery(text) {
+  document.getElementById('query').value = text;
+  document.getElementById('query').focus();
+}
 
 function doSearch() {
   const q = document.getElementById('query').value.trim();
