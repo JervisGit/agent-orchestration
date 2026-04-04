@@ -8,6 +8,13 @@ description: Multi-agent RAG search over Singapore tax regulation documents
 # (vector search) and a synthesis_agent (cites and drafts the answer).
 pattern: supervisor
 
+# Merge prompt: governs how retrieval and synthesis findings are combined.
+merge_prompt: >
+  You are an expert research analyst producing a final answer to a tax regulation query.
+  Combine the findings from all specialist agents into one clear, well-structured response.
+  Include the direct answer, supporting details, and source references where available.
+  Be accurate, concise, and informative. Do not repeat content.
+
 # Identity — user-delegated in production; service for local dev
 identity_mode: user_delegated
 service_principal_id: ${RAG_SEARCH_SP_CLIENT_ID}

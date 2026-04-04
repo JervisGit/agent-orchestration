@@ -24,12 +24,18 @@
   .card h3 { font-size: 13px; font-weight: 600; color: #605e5c; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
 
   /* Workflow step cards */
-  .steps { display: flex; flex-direction: column; gap: 6px; }
-  .step { display: flex; align-items: flex-start; gap: 10px; padding: 8px 12px; background: #faf9f8; border-left: 3px solid #0078d4; font-size: 13px; border-radius: 0 2px 2px 0; }
-  .step.tool     { border-color: #8764b8; }
-  .step.agent    { border-color: #00b7c3; }
-  .step.supervisor { border-color: #0078d4; font-style: italic; }
-  .step-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+  .steps { display: flex; flex-direction: column; gap: 4px; }
+  .step { background: #faf9f8; border-left: 3px solid #0078d4; font-size: 13px; border-radius: 0 2px 2px 0; overflow: hidden; }
+  .step.tool      { border-color: #8764b8; }
+  .step.agent     { border-color: #00b7c3; }
+  .step.supervisor { border-color: #0078d4; }
+  .step-header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; user-select: none; }
+  .step-header:hover { background: #f0eeec; }
+  .step-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; color: #0078d4; }
+  .step.tool .step-dot { color: #8764b8; }
+  .step.agent .step-dot { color: #00b7c3; }
+  .step-body { padding: 0 10px 8px 24px; }
+  .step.collapsed .step-body { display: none; }
   details.reasoning { margin-top: 5px; font-size: 12px; }
   details.reasoning summary { cursor: pointer; color: #605e5c; }
   details.reasoning pre { background: #f8f8f8; padding: 8px; border-radius: 2px; margin-top: 4px; white-space: pre-wrap; font-family: 'Cascadia Code', Consolas, monospace; font-size: 11px; color: #444; max-height: 260px; overflow-y: auto; }
@@ -107,6 +113,31 @@
 <script>
 const API = '';
 let currentES = null;
+let _lastStepEl = null;
+
+function _collapseLastStep() {
+  if (_lastStepEl) _lastStepEl.classList.add('collapsed');
+}
+
+function _collapseAllSteps() {
+  document.querySelectorAll('#steps .step').forEach(s => s.classList.add('collapsed'));
+}
+
+function _makeStep(className, headerLabel, badgeHtml, bodyHtml) {
+  _collapseLastStep();
+  const div = document.createElement('div');
+  div.className = 'step ' + className;
+  div.innerHTML =
+    `<div class="step-header" onclick="this.parentElement.classList.toggle('collapsed')">` +
+      `<span class="step-dot"></span>` +
+      `<strong>${headerLabel}</strong>` +
+      (badgeHtml ? `&nbsp;${badgeHtml}` : '') +
+    `</div>` +
+    `<div class="step-body">${bodyHtml}</div>`;
+  document.getElementById('steps').appendChild(div);
+  _lastStepEl = div;
+  return div;
+}
 
 document.getElementById('query').addEventListener('keydown', e => {
   if (e.key === 'Enter') doSearch();
@@ -125,6 +156,7 @@ function doSearch() {
   document.getElementById('sourcesBox').style.display = 'none';
   document.getElementById('traceLink').style.display = 'none';
   document.getElementById('searchBtn').disabled = true;
+  _lastStepEl = null;
 
   let answerBuf = '';
   let streaming = false;
@@ -142,57 +174,40 @@ function doSearch() {
     // ── Research coordinator (supervisor) routing decision ──
     if (msg.type === 'planner_step') {
       const nextBadge = msg.next === 'FINISH'
-        ? `<span style="background:#dff6dd;color:#0b6f0b;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">✓ FINISH</span>`
-        : `<span style="background:#deecf9;color:#004578;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">→ ${escapeHtml(msg.next)}</span>`;
-      let inner = `<span class="step-icon">🧭</span><div><strong>${escapeHtml(msg.label)}</strong>&nbsp;${nextBadge}`;
+        ? `<span style="background:#dff6dd;color:#0b6f0b;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">FINISH</span>`
+        : `<span style="background:#deecf9;color:#004578;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">&rarr; ${escapeHtml(msg.next)}</span>`;
+      let body = '';
       if (msg.reasoning) {
-        inner += `<details class="reasoning"><summary>Coordinator reasoning (click to expand)…</summary><pre>${escapeHtml(msg.reasoning)}</pre></details>`;
+        body = `<details class="reasoning"><summary>Coordinator reasoning (click to expand)&hellip;</summary><pre>${escapeHtml(msg.reasoning)}</pre></details>`;
       }
-      inner += '</div>';
-      const div = document.createElement('div');
-      div.className = 'step supervisor';
-      div.innerHTML = inner;
-      document.getElementById('steps').appendChild(div);
+      _makeStep('supervisor', escapeHtml(msg.label), nextBadge, body);
     }
 
     // ── Tool call (vector_search) step card ──
     if (msg.type === 'tool_step') {
       const args = msg.args || {};
       const argStr = Object.entries(args).map(([k,v]) => `${k}: "${escapeHtml(String(v))}"`).join(' | ');
-      let inner = `<span class="step-icon">🔍</span><div>
-        <strong>${escapeHtml(msg.label)}</strong>
-        <br><code style="font-size:11px;color:#4a154b;background:#f9f0ff;padding:1px 4px;border-radius:2px;">${escapeHtml(msg.tool)}(${argStr})</code>`;
+      let body = `<code style="font-size:11px;color:#4a154b;background:#f9f0ff;padding:1px 4px;border-radius:2px;">${escapeHtml(msg.tool)}(${argStr})</code>`;
       if (msg.result) {
-        inner += `<details class="reasoning"><summary>Retrieved content (click to expand)…</summary><pre>${escapeHtml(msg.result)}</pre></details>`;
+        body += `<details class="reasoning"><summary>Retrieved content (click to expand)&hellip;</summary><pre>${escapeHtml(msg.result)}</pre></details>`;
       }
-      inner += '</div>';
-      const div = document.createElement('div');
-      div.className = 'step tool';
-      div.innerHTML = inner;
-      document.getElementById('steps').appendChild(div);
+      _makeStep('tool', escapeHtml(msg.label), '', body);
     }
 
     // ── Agent (retrieval / synthesis) step card ──
     if (msg.type === 'agent_step') {
       const isRetrieval = msg.node === 'retrieval_agent';
-      const icon = isRetrieval ? '📚' : '✍️';
-      let inner = `<span class="step-icon">${icon}</span><div><strong>${escapeHtml(msg.label)}</strong>`;
+      let body = '';
       if (msg.response) {
-        inner += `<details class="reasoning"><summary>Agent output (click to expand)…</summary><pre>${escapeHtml(msg.response)}</pre></details>`;
+        body = `<details class="reasoning"><summary>Agent output (click to expand)&hellip;</summary><pre>${escapeHtml(msg.response)}</pre></details>`;
       }
-      inner += '</div>';
-      const div = document.createElement('div');
-      div.className = `step${isRetrieval ? ' tool' : ' agent'}`;
-      div.innerHTML = inner;
-      document.getElementById('steps').appendChild(div);
+      _makeStep(isRetrieval ? 'tool' : 'agent', escapeHtml(msg.label), '', body);
     }
 
     // ── Legacy step fallback ──
     if (msg.type === 'step') {
-      const div = document.createElement('div');
-      div.className = 'step' + (msg.node && msg.node.startsWith('tool:') ? ' tool' : '');
-      div.innerHTML = `<span class="step-icon">⚙️</span><span>${escapeHtml(msg.label || msg.node)}</span>`;
-      document.getElementById('steps').appendChild(div);
+      const isTool = msg.node && msg.node.startsWith('tool:');
+      _makeStep(isTool ? 'tool' : '', escapeHtml(msg.label || msg.node), '', '');
     }
 
     if (msg.type === 'token') {
@@ -206,6 +221,7 @@ function doSearch() {
     }
 
     if (msg.type === 'complete') {
+      _collapseAllSteps();
       document.getElementById('answerBox').style.display = '';
       const box = document.getElementById('answerText');
       box.textContent = msg.result.answer;

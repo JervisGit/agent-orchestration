@@ -10,6 +10,13 @@ description: Compliance investigation tool — explores entity relationships to 
 # Supervisor: compliance_planner decides investigation steps, graph_investigator executes
 pattern: supervisor
 
+# Merge prompt: governs how investigation findings are combined into one report.
+merge_prompt: >
+  You are a senior compliance analyst producing a final investigation report.
+  Combine the findings from all specialist agents into one clear, structured report.
+  Include: executive summary, key findings, ownership/relationship analysis,
+  risk assessment, and recommendations. Be factual and concise. Do not repeat content.
+
 # Identity — user-delegated for audit trail (relaxed to service for local dev)
 identity_mode: user_delegated
 service_principal_id: ${GRAPH_COMPLIANCE_SP_CLIENT_ID}

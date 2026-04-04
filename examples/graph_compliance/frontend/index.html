@@ -70,11 +70,16 @@
   .card { background: #fff; border-radius: 4px; box-shadow: 0 1.6px 3.6px rgba(0,0,0,.13); padding: 20px; margin-bottom: 16px; }
   .card h3 { font-size: 13px; font-weight: 600; color: #605e5c; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
 
-  .steps { display: flex; flex-direction: column; gap: 5px; }
-  .step { display: flex; align-items: flex-start; gap: 10px; padding: 6px 10px; background: #faf9f8; border-left: 3px solid #0078d4; font-size: 13px; border-radius: 0 2px 2px 0; }
-  .step.tool  { border-color: #8764b8; }
-  .step.supervisor { border-color: #0078d4; font-style: italic; }
-  .step-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+  .steps { display: flex; flex-direction: column; gap: 4px; }
+  .step { background: #faf9f8; border-left: 3px solid #0078d4; font-size: 13px; border-radius: 0 2px 2px 0; overflow: hidden; }
+  .step.tool      { border-color: #8764b8; }
+  .step.supervisor { border-color: #0078d4; }
+  .step-header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; user-select: none; }
+  .step-header:hover { background: #f0eeec; }
+  .step-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; color: #0078d4; }
+  .step.tool .step-dot { color: #8764b8; }
+  .step-body { padding: 0 10px 8px 24px; }
+  .step.collapsed .step-body { display: none; }
   details.reasoning { margin-top: 4px; font-size: 12px; }
   details.reasoning summary { cursor: pointer; color: #605e5c; }
   details.reasoning pre { background: #f8f8f8; padding: 8px; border-radius: 2px; margin-top: 4px; white-space: pre-wrap; font-family: 'Cascadia Code', Consolas, monospace; font-size: 11px; color: #444; }
@@ -218,6 +223,32 @@ function setQuery(text) {
 }
 
 let currentES = null;
+let _lastStepEl = null;
+
+function _collapseLastStep() {
+  if (_lastStepEl) _lastStepEl.classList.add('collapsed');
+}
+
+function _collapseAllSteps() {
+  document.querySelectorAll('#steps .step').forEach(s => s.classList.add('collapsed'));
+}
+
+function _makeStep(className, headerLabel, badgeHtml, bodyHtml) {
+  _collapseLastStep();
+  const div = document.createElement('div');
+  div.className = 'step ' + className;
+  div.innerHTML =
+    `<div class="step-header" onclick="this.parentElement.classList.toggle('collapsed')">` +
+      `<span class="step-dot"></span>` +
+      `<strong>${headerLabel}</strong>` +
+      (badgeHtml ? `&nbsp;${badgeHtml}` : '') +
+    `</div>` +
+    `<div class="step-body">${bodyHtml}</div>`;
+  document.getElementById('steps').appendChild(div);
+  _lastStepEl = div;
+  return div;
+}
+
 function doInvestigate() {
   const q = document.getElementById('queryInput').value.trim();
   if (!q) return;
@@ -230,6 +261,7 @@ function doInvestigate() {
   document.getElementById('reportText').innerHTML = '';
   document.getElementById('traceLink').style.display = 'none';
   document.getElementById('investigateBtn').disabled = true;
+  _lastStepEl = null;
 
   let reportBuf = '';
   let streaming = false;
@@ -247,71 +279,48 @@ function doInvestigate() {
     // ── Planner (supervisor) decision card ──
     if (msg.type === 'planner_step') {
       const nextBadge = msg.next === 'FINISH'
-        ? `<span style="background:#dff6dd;color:#0b6f0b;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">✓ FINISH</span>`
-        : `<span style="background:#deecf9;color:#004578;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">→ ${escHtml(msg.next)}</span>`;
-      let inner = `<span class="step-icon">🧭</span><div>
-        <strong>${escHtml(msg.label)}</strong>&nbsp;${nextBadge}`;
+        ? `<span style="background:#dff6dd;color:#0b6f0b;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">FINISH</span>`
+        : `<span style="background:#deecf9;color:#004578;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">&rarr; ${escHtml(msg.next)}</span>`;
+      let body = '';
       if (msg.reasoning) {
-        inner += `<details class="reasoning"><summary>Planner reasoning (click to expand)…</summary><pre>${escHtml(msg.reasoning)}</pre></details>`;
+        body = `<details class="reasoning"><summary>Planner reasoning (click to expand)&hellip;</summary><pre>${escHtml(msg.reasoning)}</pre></details>`;
       }
-      inner += '</div>';
-      const div = document.createElement('div');
-      div.className = 'step supervisor';
-      div.innerHTML = inner;
-      document.getElementById('steps').appendChild(div);
+      _makeStep('supervisor', escHtml(msg.label), nextBadge, body);
     }
 
     // ── Tool call step card ──
     if (msg.type === 'tool_step') {
       const args = msg.args || {};
       const argStr = Object.entries(args).map(([k,v]) => `${k}: ${escHtml(String(v))}`).join(' | ');
-      let inner = `<span class="step-icon">🔍</span><div>
-        <strong>${escHtml(msg.label)}</strong>
-        <br><code style="font-size:11px;color:#4a154b;background:#f9f0ff;padding:1px 4px;border-radius:2px;">${escHtml(msg.tool)}(${argStr})</code>`;
+      let body = `<code style="font-size:11px;color:#4a154b;background:#f9f0ff;padding:1px 4px;border-radius:2px;">${escHtml(msg.tool)}(${argStr})</code>`;
       if (msg.result) {
-        inner += `<details class="reasoning"><summary>Result (click to expand)…</summary><pre>${escHtml(msg.result)}</pre></details>`;
+        body += `<details class="reasoning"><summary>Result (click to expand)&hellip;</summary><pre>${escHtml(msg.result)}</pre></details>`;
       }
       if (msg.judge && msg.judge.verdict) {
         const jColor = msg.judge.verdict === 'APPROPRIATE' ? '#0b6f0b' : '#ca5010';
-        inner += `<br><span style="font-size:10px;color:${jColor};">🔎 Judge: ${escHtml(msg.judge.verdict)}</span>`;
+        body += `<br><span style="font-size:10px;color:${jColor};">Judge: ${escHtml(msg.judge.verdict)}</span>`;
       }
-      inner += '</div>';
-      const div = document.createElement('div');
-      div.className = 'step tool';
-      div.innerHTML = inner;
-      document.getElementById('steps').appendChild(div);
+      _makeStep('tool', escHtml(msg.label), '', body);
     }
 
     // ── Agent (investigator / assessor) step card ──
     if (msg.type === 'agent_step') {
-      const isInvestigator = msg.node === 'graph_investigator';
-      const icon = isInvestigator ? '🕵️' : '📋';
-      let inner = `<span class="step-icon">${icon}</span><div>
-        <strong>${escHtml(msg.label)}</strong>`;
+      let body = '';
       if (msg.response) {
-        inner += `<details class="reasoning"><summary>Agent response (click to expand)…</summary><pre>${escHtml(msg.response)}</pre></details>`;
+        body = `<details class="reasoning"><summary>Agent response (click to expand)&hellip;</summary><pre>${escHtml(msg.response)}</pre></details>`;
       }
-      inner += '</div>';
-      const div = document.createElement('div');
-      div.className = `step${isInvestigator ? ' tool' : ''}`;
-      div.innerHTML = inner;
-      document.getElementById('steps').appendChild(div);
+      _makeStep('', escHtml(msg.label), '', body);
     }
 
     // ── Legacy step type (fallback) ──
     if (msg.type === 'step') {
       const isTool = msg.node && msg.node.startsWith('tool:');
       const isSuper = msg.node === 'compliance_planner';
-      const icon = isTool ? '🔍' : isSuper ? '🧭' : '⚙️';
-      const div = document.createElement('div');
-      div.className = `step${isTool ? ' tool' : isSuper ? ' supervisor' : ''}`;
-      let inner = `<span class="step-icon">${icon}</span><div><strong>${escHtml(msg.label || msg.node)}</strong>`;
+      let body = '';
       if (msg.detail && Object.keys(msg.detail).length) {
-        inner += `<br><span style="font-size:11px;color:#8a8886">${escHtml(JSON.stringify(msg.detail).substring(0, 200))}</span>`;
+        body = `<span style="font-size:11px;color:#8a8886">${escHtml(JSON.stringify(msg.detail).substring(0, 200))}</span>`;
       }
-      inner += '</div>';
-      div.innerHTML = inner;
-      document.getElementById('steps').appendChild(div);
+      _makeStep(isTool ? 'tool' : isSuper ? 'supervisor' : '', escHtml(msg.label || msg.node), '', body);
     }
 
     if (msg.type === 'token') {
@@ -324,6 +333,7 @@ function doInvestigate() {
     }
 
     if (msg.type === 'complete') {
+      _collapseAllSteps();
       document.getElementById('reportCard').style.display = '';
       document.getElementById('reportText').textContent = msg.result.report;
       if (msg.result.langfuse_url) {

@@ -111,6 +111,12 @@ class AppManifest:
     llm_endpoint: str | None = None  # Azure OpenAI endpoint (shared or app-specific)
     llm_api_key_secret: str | None = None  # Key Vault secret name
 
+    # Supervisor merge
+    # When a supervisor pattern workflow finishes with multiple specialist outputs,
+    # an LLM call merges them.  Set this to a system prompt string to customise
+    # the merge behaviour for this app.  Leave empty to use the generic default.
+    merge_prompt: str = ""
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AppManifest":
         """Load an app manifest from a YAML file."""
@@ -145,6 +151,7 @@ class AppManifest:
             llm_endpoint=data.get("llm_endpoint"),
             llm_api_key_secret=data.get("llm_api_key_secret"),
             intent_agents=data.get("intent_agents", []),
+            merge_prompt=data.get("merge_prompt", ""),
         )
 
     @classmethod

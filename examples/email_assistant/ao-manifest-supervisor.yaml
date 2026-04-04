@@ -18,6 +18,15 @@ pattern: supervisor
 
 langfuse_project: email-assistant
 
+# Merge prompt: governs how multiple specialist replies are combined into one.
+# Tailored for the email assistant — produces a professional reply email.
+merge_prompt: >
+  You are a senior tax authority officer composing a final reply to a taxpayer email.
+  You have received responses from specialist agents covering different aspects of the enquiry.
+  Combine them into a single, coherent, professional reply email addressed to the taxpayer.
+  Do not repeat information. Address each point clearly and in a logical order.
+  Keep the total reply under 350 words. Use a polite, official tone.
+
 agents:
 
   - name: supervisor

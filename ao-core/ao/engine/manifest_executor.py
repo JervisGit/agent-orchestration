@@ -428,14 +428,26 @@ class ManifestExecutor:
         # Notify queue that tool call completed — include args, truncated result, and judge verdict
         if token_queue:
             try:
+                detail: dict = {
+                    "args": args,
+                    "result": content_str[:600],   # first 600 chars of tool result
+                    "judge": tool_judge,
+                }
+                # For taxpayer lookup tools, include found/name fields so the
+                # email assistant frontend (which checks d.found && d.taxpayer_name)
+                # continues to work alongside the generic result field.
+                if "taxpayer" in state_update:
+                    tp = state_update["taxpayer"]
+                    if tp:
+                        detail["found"] = True
+                        detail["taxpayer_name"] = tp.get("full_name", "")
+                        detail["taxpayer_id"] = tp.get("tax_id", "")
+                    else:
+                        detail["found"] = False
                 token_queue.put_nowait({
                     "node": f"tool:{tool_name}",
                     "done": True,
-                    "detail": {
-                        "args": args,
-                        "result": content_str[:600],   # first 600 chars of tool result
-                        "judge": tool_judge,
-                    },
+                    "detail": detail,
                 })
             except asyncio.QueueFull:
                 pass
@@ -1256,17 +1268,20 @@ class ManifestExecutor:
                     {
                         "role": "system",
                         "content": (
-                            "You are a senior tax authority officer finalising a reply email. "
-                            "You have received specialist responses for multiple parts of one "
-                            "taxpayer enquiry. Combine them into a single, coherent, professional "
-                            "reply email. Do not repeat information. Address each point clearly. "
-                            "Keep the total reply under 350 words."
+                            executor._manifest.merge_prompt
+                            or (
+                                "You are a senior expert consolidating findings from multiple specialists "
+                                "into one clear, comprehensive, well-structured response. "
+                                "Synthesise all information coherently. Do not repeat content. "
+                                "Present the combined findings in a logical, readable format. "
+                                "Be thorough but concise."
+                            )
                         ),
                     },
                     {
                         "role": "user",
                         "content": (
-                            f"Original email:\n{state.get('input', '')}\n\n"
+                            f"Original question:\n{state.get('input', '')}\n\n"
                             f"Specialist responses to combine:\n{sections}"
                         ),
                     },
@@ -1495,17 +1510,20 @@ class ManifestExecutor:
                             {
                                 "role": "system",
                                 "content": (
-                                    "You are a senior tax authority officer finalising a reply email. "
-                                    "You have received specialist responses for multiple parts of one "
-                                    "taxpayer enquiry. Combine them into a single, coherent, professional "
-                                    "reply email. Do not repeat information. Address each point clearly. "
-                                    "Keep the total reply under 350 words."
+                                    executor._manifest.merge_prompt
+                                    or (
+                                        "You are a senior expert consolidating findings from multiple specialists "
+                                        "into one clear, comprehensive, well-structured response. "
+                                        "Synthesise all information coherently. Do not repeat content. "
+                                        "Present the combined findings in a logical, readable format. "
+                                        "Be thorough but concise."
+                                    )
                                 ),
                             },
                             {
                                 "role": "user",
                                 "content": (
-                                    f"Original email:\n{state.get('input', '')}\n\n"
+                                    f"Original question:\n{state.get('input', '')}\n\n"
                                     f"Specialist responses to combine:\n{sections}"
                                 ),
                             },
