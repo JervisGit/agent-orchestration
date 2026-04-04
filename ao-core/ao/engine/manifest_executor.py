@@ -325,6 +325,7 @@ class ManifestExecutor:
         state: dict,
         lf_trace: Any | None,
         identity: IdentityContext | None = None,
+        agent_name: str = "",
     ) -> tuple[dict, dict]:
         """Execute a registered tool; return (tool_message, state_update)."""
         if tool_name not in self._tools:
@@ -432,6 +433,7 @@ class ManifestExecutor:
                     "args": args,
                     "result": content_str[:600],   # first 600 chars of tool result
                     "judge": tool_judge,
+                    "calling_agent": agent_name,
                 }
                 # For taxpayer lookup tools, include found/name fields so the
                 # email assistant frontend (which checks d.found && d.taxpayer_name)
@@ -904,6 +906,7 @@ class ManifestExecutor:
                         tool_msg, state_update = await executor._execute_tool_call(
                             tc["id"], tc["name"], tc["arguments"], state, lf_trace,
                             identity=executor._resolve_identity(state, cfg),
+                            agent_name=cfg.name,
                         )
                         messages.append(tool_msg)
                         extra_state.update(state_update)
@@ -1153,6 +1156,7 @@ class ManifestExecutor:
                         tool_msg, state_update = await executor._execute_tool_call(
                             tc["id"], tc["name"], tc["arguments"], state, lf_trace,
                             identity=executor._resolve_identity(state, cfg),
+                            agent_name=cfg.name,
                         )
                         messages.append(tool_msg)
                         extra_state.update(state_update)

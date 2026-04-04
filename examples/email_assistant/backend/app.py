@@ -129,7 +129,8 @@ STEP_LABELS: dict[str, str] = {
     "dispatch":            "Running specialist agents in parallel",
     "merge":               "Synthesising specialist responses into one reply",
     "policy_check":        "Applying guardrail policies",
-    "tool:lookup_taxpayer": "Agent looking up taxpayer record from database",
+    "tool:lookup_taxpayer":       "looking up taxpayer record from database",
+    "tool:retrieve_past_emails":  "retrieving past email style examples",
 }
 
 # ── Human-readable labels for content safety violation categories ────
@@ -351,35 +352,108 @@ async def _tool_lookup_taxpayer(tin: str, identity: IdentityContext | None = Non
     }
 
 # ── Tool schema: derive TIN pattern from manifest tool definition ─────
-# The lookup_taxpayer tool entry in ao-manifest.yaml declares the TIN
-# parameter with a 'pattern' constraint. Reading it here keeps the
-# validation rule in one place (the manifest) rather than hardcoded.
-_manifest_lookup_tool = next(
-    (t for t in manifest.tools if t.name == "lookup_taxpayer"), None
-)
-_tin_pattern = (
-    (_manifest_lookup_tool.params.get("parameters", {}) or {})
-    .get("tin", {}).get("pattern")
-) if _manifest_lookup_tool else None
+# ── RAG: past email replies for writing style reference ─────────────
+# A small in-memory corpus of past professionally drafted reply emails.
+# Used by retrieve_past_emails tool to show the agent example tone/format.
+# Only one specialist (assessment_relief in the supervisor manifest) uses
+# this tool so existing email examples are unaffected.
+_PAST_REPLIES = [
+    {
+        "subject": "Re: Objection to Notice of Assessment — capital gain classification",
+        "category": "assessment_relief",
+        "reply": (
+            "Dear Ms Wong,\n\n"
+            "Thank you for your letter dated 15 February 2026 regarding your YA 2024 "
+            "Notice of Assessment.\n\n"
+            "We acknowledge your objection concerning the SGD 42,000 gain from the "
+            "disposal of your property, which you have characterised as capital in nature. "
+            "As you are within the 30-day objection window, your objection is validly lodged.\n\n"
+            "To assist in our review, please provide: (1) a copy of the Notice of Assessment, "
+            "(2) sale and purchase agreement for the property, and (3) a written statement "
+            "explaining the capital nature of the transaction.\n\n"
+            "Please allow up to 90 working days after receipt of all documents for processing.\n\n"
+            "Yours sincerely,\nTax Authority — Assessment Division"
+        ),
+    },
+    {
+        "subject": "Re: Assessment Objection — subsidiary disposal gain",
+        "category": "assessment_relief",
+        "reply": (
+            "Dear Mr Tan,\n\n"
+            "Thank you for your enquiry regarding the classification of proceeds from the "
+            "disposal of your subsidiary.\n\n"
+            "Singapore does not levy capital gains tax. However, whether a gain is capital "
+            "or income in nature depends on the facts and circumstances, including the "
+            "frequency of similar transactions and your primary intention at the time of "
+            "acquisition. We will require the following for our assessment review:\n"
+            "  1. Board resolution authorising the disposal\n"
+            "  2. Sale and purchase agreement\n"
+            "  3. Evidence of the original acquisition intent\n\n"
+            "We will revert within 90 working days after full documentation is received.\n\n"
+            "Yours sincerely,\nTax Authority — Corporate Tax Division"
+        ),
+    },
+    {
+        "subject": "Re: Payment instalment plan request",
+        "category": "payment_arrangement",
+        "reply": (
+            "Dear Taxpayer,\n\n"
+            "Thank you for writing to us regarding an instalment plan for your outstanding "
+            "tax liability.\n\n"
+            "We are pleased to advise that instalment plans are available for qualifying "
+            "taxpayers. To apply, please complete the Instalment Plan Request Form (available "
+            "on our website) and submit it together with your most recent 3 months of "
+            "bank statements. Applications are typically processed within 10 working days.\n\n"
+            "Interest at 5% per annum continues to accrue on the outstanding balance "
+            "during the instalment period.\n\n"
+            "Yours sincerely,\nTax Authority — Collections Division"
+        ),
+    },
+]
 
-_LOOKUP_TAXPAYER_SCHEMA: dict = {
-    "name": "lookup_taxpayer",
+def _tool_retrieve_past_emails(query: str) -> dict:
+    """Search the past replies corpus for examples relevant to the given query.
+
+    Uses simple keyword matching — sufficient for a demo without pgvector.
+    Returns up to 2 most relevant past replies as formatted text.
+    """
+    query_lower = query.lower()
+    scored = []
+    for r in _PAST_REPLIES:
+        score = sum(
+            1
+            for kw in query_lower.split()
+            if kw in r["subject"].lower() or kw in r["reply"].lower() or kw in r["category"]
+        )
+        if score > 0:
+            scored.append((score, r))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = scored[:2]
+    if not top:
+        top = [(0, _PAST_REPLIES[0])]  # fallback: return first example
+
+    examples = "\n\n---\n\n".join(
+        f"Subject: {r['subject']}\n\n{r['reply']}"
+        for _, r in top
+    )
+    return {"content": f"PAST REPLY EXAMPLES FOR STYLE REFERENCE:\n\n{examples}"}
+
+_RETRIEVE_PAST_EMAILS_SCHEMA: dict = {
+    "name": "retrieve_past_emails",
     "description": (
-        "Look up a taxpayer's record from the database using their Tax Identification "
-        "Number (TIN). Call this when the email contains a TIN (format: SG-TXXX-XXXX) "
-        "and you need taxpayer details such as outstanding balance, penalty count, or "
-        "filing status to respond accurately."
+        "Retrieve examples of past professionally drafted reply emails from the tax authority "
+        "that are relevant to the current case. Use this to ensure your reply follows the "
+        "correct tone, format, and structure. Pass a short description of the email topic as query."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "tin": {
+            "query": {
                 "type": "string",
-                "description": "The taxpayer's TIN, e.g. SG-T001-2890",
-                **({"pattern": _tin_pattern} if _tin_pattern else {}),
+                "description": "Short description of the topic, e.g. 'capital gain disposal objection'",
             }
         },
-        "required": ["tin"],
+        "required": ["query"],
     },
 }
 
@@ -389,8 +463,11 @@ _LOOKUP_TAXPAYER_SCHEMA: dict = {
 executor.register_tool("lookup_taxpayer", _tool_lookup_taxpayer, _LOOKUP_TAXPAYER_SCHEMA)
 compiled_graph = executor.compile(state_schema=TaxEmailState)
 
-# Wire the same tool into the supervisor executor and compile it
+# Wire the same tools into the supervisor executor and compile it.
+# retrieve_past_emails is only declared in one specialist in ao-manifest-supervisor.yaml,
+# so other agents won't see or call it.
 executor_sv.register_tool("lookup_taxpayer", _tool_lookup_taxpayer, _LOOKUP_TAXPAYER_SCHEMA)
+executor_sv.register_tool("retrieve_past_emails", _tool_retrieve_past_emails, _RETRIEVE_PAST_EMAILS_SCHEMA)
 compiled_graph_sv = executor_sv.compile(state_schema=TaxEmailState)
 
 # ── HITL helpers ─────────────────────────────────────────────────────
@@ -937,7 +1014,15 @@ async def process_email_stream(email_id: str):
                     # Node finished streaming (or tool call completed) — emit step event
                     node_name = item["node"]
                     streamed_nodes.add(node_name)
-                    step_evt = {'type': 'step', 'node': node_name, 'label': STEP_LABELS.get(node_name, node_name), 'detail': item.get('detail', {})}
+                    item_detail = item.get("detail", {})
+                    label = STEP_LABELS.get(node_name, node_name)
+                    # For tool steps, prefix with the calling agent name
+                    if node_name.startswith("tool:"):
+                        calling_agent = item_detail.get("calling_agent", "")
+                        if calling_agent:
+                            agent_display = STEP_LABELS.get(calling_agent, calling_agent.replace("_", " ").title())
+                            label = f"{agent_display} — {label}"
+                    step_evt = {'type': 'step', 'node': node_name, 'label': label, 'detail': item_detail}
                     completed_steps_log.append({'node': node_name, 'label': step_evt['label'], 'detail': step_evt['detail']})
                     yield f"data: {json.dumps(step_evt)}\n\n"
 

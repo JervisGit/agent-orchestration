@@ -213,7 +213,7 @@ RAG_STEP_LABELS: dict[str, str] = {
     "query_analyst":        "Research Coordinator deciding strategy",
     "retrieval_agent":      "Retrieval Agent searching knowledge base",
     "synthesis_agent":      "Synthesis Agent drafting cited answer",
-    "tool:vector_search":   "Vector search — querying document index",
+    "tool:vector_search":   "querying document index",
 }
 
 # ── Sample documents for demo ────────────────────────────────────────
@@ -513,7 +513,11 @@ async def search_stream(q: str = Query(..., min_length=1)):
                     # Supervisor routing decision
                     yield f"data: {json.dumps({'type': 'planner_step', 'node': node, 'label': label, 'next': detail.get('next',''), 'step': detail.get('step',0), 'reasoning': detail.get('reasoning','')})}\n\n"
                 elif node.startswith("tool:"):
-                    # Tool call with query args + truncated result
+                    # Tool call with query args + truncated result; prefix label with calling agent name
+                    calling_agent = detail.get("calling_agent", "")
+                    if calling_agent:
+                        agent_display = RAG_STEP_LABELS.get(calling_agent, calling_agent.replace("_", " ").title())
+                        label = f"{agent_display} — {label}"
                     yield f"data: {json.dumps({'type': 'tool_step', 'node': node, 'label': label, 'tool': node[5:], 'args': detail.get('args',{}), 'result': detail.get('result','')[:500], 'judge': detail.get('judge')})}\n\n"
                 else:
                     # Specialist agent final response

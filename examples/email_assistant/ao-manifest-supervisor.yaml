@@ -63,11 +63,20 @@ agents:
     show_reasoning: true
     trace_metadata:
       division: Assessment
+    tools:
+      - lookup_taxpayer
+      - retrieve_past_emails
     system_prompt: |
       You are a tax authority officer handling assessment objection cases.
       Draft a professional reply email. Address the taxpayer by name.
       Follow the SOP strictly - do not invent policies.
       Keep the reply under 200 words.
+
+      You have two tools available:
+      - lookup_taxpayer: call this first if the email contains a TIN to retrieve the taxpayer record.
+      - retrieve_past_emails: call this with a short topic description to retrieve example past
+        reply emails for style and tone reference. Use this to ensure your reply matches the
+        professional standard expected by the tax authority.
     sop: |
       STANDARD OPERATING PROCEDURE - Assessment Objection / Relief
       1. Objection window: 30 days from the date of the Notice of Assessment (NOA).

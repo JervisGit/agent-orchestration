@@ -173,10 +173,10 @@ STEP_LABELS: dict[str, str] = {
     "compliance_planner":       "Compliance Planner deciding next step",
     "graph_investigator":       "Graph Investigator querying the compliance graph",
     "risk_assessor":            "Risk Assessor synthesising compliance findings",
-    "tool:find_entity":         "Graph query — finding entity",
-    "tool:get_neighbors":       "Graph query — retrieving relationships",
-    "tool:find_path":           "Graph query — tracing connection path",
-    "tool:get_risk_indicators": "Graph query — assessing risk indicators",
+    "tool:find_entity":         "finding entity",
+    "tool:get_neighbors":       "retrieving relationships",
+    "tool:find_path":           "tracing connection path",
+    "tool:get_risk_indicators": "assessing risk indicators",
     "merge":                    "Synthesising investigation findings",
 }
 
@@ -330,6 +330,10 @@ async def investigate_stream(q: str = Query(..., min_length=1)):
                 # Tool call steps carry query args + graph result
                 elif node.startswith("tool:"):
                     tool_name = node[5:]  # strip "tool:"
+                    calling_agent = detail.get("calling_agent", "")
+                    if calling_agent:
+                        agent_display = STEP_LABELS.get(calling_agent, calling_agent.replace("_", " ").title())
+                        label = f"{agent_display} — {label}"
                     step_evt = {
                         "type": "tool_step",
                         "node": node,

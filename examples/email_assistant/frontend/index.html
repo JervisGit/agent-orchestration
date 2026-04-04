@@ -651,10 +651,15 @@
             }
             if (s.node && s.node.startsWith('tool:')) {
               let toolDetail = '';
-              if (d.found && d.taxpayer_name)
-                toolDetail = ` → ${esc(d.taxpayer_id)} · ${esc(d.taxpayer_name)}`;
-              else if (d.args && (d.args.tin || d.args.email))
-                toolDetail = ` → ${esc(d.args.tin || d.args.email)} · No record found`;
+              if (s.node === 'tool:lookup_taxpayer') {
+                if (d.found && d.taxpayer_name)
+                  toolDetail = ` → ${esc(d.taxpayer_id)} · ${esc(d.taxpayer_name)}`;
+                else if (d.args && (d.args.tin || d.args.email))
+                  toolDetail = ` → ${esc(d.args.tin || d.args.email)} · No record found`;
+              } else if (s.node === 'tool:retrieve_past_emails') {
+                if (d.args && d.args.query)
+                  toolDetail = ` → "${esc(d.args.query)}"`;
+              }
               // Judge verdict sub-row
               let judgeRow = '';
               if (d.judge && d.judge.verdict) {
@@ -664,7 +669,7 @@
                 const jReason = d.judge.reason ? ` — ${esc(d.judge.reason)}` : '';
                 judgeRow = `<div style="font-size:10px;color:${jCol};padding-left:20px;margin-top:1px">${jIcon} Tool judge: ${esc(jv)}${jReason}</div>`;
               }
-              return `<div class="step-tool"><span>&#x1F527;</span> ${esc(s.label)}<span class="step-detail" style="display:inline">${toolDetail}</span>${judgeRow}</div>`;
+              return `<div class="step-tool"><span>&#x25AA;</span> ${esc(s.label)}<span class="step-detail" style="display:inline">${toolDetail}</span>${judgeRow}</div>`;
             }
             if (d.taxpayer_found === true && d.taxpayer_name)
               det = `<div class="step-detail">→ ${esc(d.taxpayer_name)} · ${esc(d.taxpayer_id || '')}</div>`;
@@ -832,11 +837,16 @@
               el.className = 'step-tool';
               const d = data.detail || {};
               let toolDetail = '';
-              if (d.found && d.taxpayer_name)
-                toolDetail = ` <span class="step-detail" style="display:inline">→ ${esc(d.taxpayer_id)} · ${esc(d.taxpayer_name)}</span>`;
-              else if (d.args && (d.args.tin || d.args.email))
-                toolDetail = ` <span class="step-detail" style="display:inline;color:var(--yellow)">→ ${esc(d.args.tin || d.args.email)} · No record found</span>`;
-              el.innerHTML = `<span>&#x1F527;</span> ${esc(data.label)}${toolDetail}`;
+              if (data.node === 'tool:lookup_taxpayer') {
+                if (d.found && d.taxpayer_name)
+                  toolDetail = ` <span class="step-detail" style="display:inline">→ ${esc(d.taxpayer_id)} · ${esc(d.taxpayer_name)}</span>`;
+                else if (d.args && (d.args.tin || d.args.email))
+                  toolDetail = ` <span class="step-detail" style="display:inline;color:var(--yellow)">→ ${esc(d.args.tin || d.args.email)} · No record found</span>`;
+              } else if (data.node === 'tool:retrieve_past_emails') {
+                if (d.args && d.args.query)
+                  toolDetail = ` <span class="step-detail" style="display:inline;color:var(--text2)">→ "${esc(d.args.query)}"</span>`;
+              }
+              el.innerHTML = `<span>&#x25AA;</span> ${esc(data.label)}${toolDetail}`;
               panel.lastElementChild?.before?.(el) || panel.appendChild(el);
             } else {
               const el = document.createElement('div');
