@@ -99,12 +99,17 @@
   .stat strong { color: #0078d4; }
 
   /* ── HITL toggle (header) ── */
-  .hitl-label { margin-left: auto; flex-shrink: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: rgba(255,255,255,.9); cursor: pointer; white-space: nowrap; user-select: none; }
+  .hitl-label { flex-shrink: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: rgba(255,255,255,.9); cursor: pointer; white-space: nowrap; user-select: none; }
   .hitl-label input[type=checkbox] { display: none; }
   .hitl-slider { width: 36px; height: 20px; background: rgba(255,255,255,.35); border-radius: 10px; position: relative; transition: background .2s; flex-shrink: 0; }
   .hitl-slider::after { content: ''; position: absolute; width: 16px; height: 16px; background: #fff; border-radius: 50%; top: 2px; left: 2px; transition: transform .2s; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
   .hitl-label input:checked + .hitl-slider { background: rgba(255,255,255,.75); }
   .hitl-label input:checked + .hitl-slider::after { transform: translateX(16px); background: #0078d4; }
+
+  /* ── User profile badge (header) ── */
+  .user-badge { display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin-left: auto; }
+  .user-avatar { width: 28px; height: 28px; border-radius: 50%; background: rgba(255,255,255,.22); border: 1.5px solid rgba(255,255,255,.55); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; flex-shrink: 0; }
+  .user-name { font-size: 12px; color: rgba(255,255,255,.85); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* ── HITL inline approval row ── */
   .hitl-action-row { display: flex; gap: 6px; margin-top: 7px; }
@@ -124,6 +129,10 @@
     <span class="hitl-slider"></span>
     HITL
   </label>
+  <div class="user-badge" id="userBadge" style="display:none;">
+    <div class="user-avatar" id="userInitials"></div>
+    <span class="user-name" id="userName"></span>
+  </div>
 </header>
 
 <div class="container">
@@ -398,6 +407,24 @@ function escHtml(t) {
   return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+// ─── User profile (EasyAuth) ───
+async function loadUserProfile() {
+  try {
+    const r = await fetch('/.auth/me');
+    if (!r.ok) return;
+    const data = await r.json();
+    const p = Array.isArray(data) ? data[0] : data;
+    if (!p) return;
+    const raw = p.user_id || p.userDetails || '';
+    const display = raw.includes('@') ? raw.split('@')[0] : raw;
+    const initials = display.slice(0, 2).toUpperCase();
+    document.getElementById('userInitials').textContent = initials;
+    document.getElementById('userName').textContent = display;
+    document.getElementById('userBadge').style.display = '';
+  } catch(e) { /* unauthenticated or local dev — badge stays hidden */ }
+}
+loadUserProfile();
+
 // ─── HITL ───
 let _pendingHitlId = null;
 
@@ -440,7 +467,7 @@ async function resolveHitl(requestId, approved) {
   if (!requestId) return;
   const row = document.getElementById(`hitl-actions-${requestId}`);
   if (row) {
-    row.innerHTML = `<span style="font-size:11px;color:${approved ? '#0078d4' : '#a19f9d'};font-style:italic;">${approved ? '\u2713 Approved' : '\u00d7 Rejected'}</span>`;
+    row.innerHTML = `<span style="font-size:11px;color:${approved ? '#0078d4' : '#a19f9d'};font-style:italic;">${approved ? 'Approved' : 'Rejected'}</span>`;
   }
   if (_pendingHitlId === requestId) _pendingHitlId = null;
   try {
