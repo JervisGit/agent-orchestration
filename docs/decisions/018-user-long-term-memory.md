@@ -219,3 +219,62 @@ For service-mode agents with no user context, `user_id = 'system'` is used and m
 - EasyAuth must be enabled on graph_compliance and rag_search container apps for `user_id` to be populated from real token claims.
 - A consolidator job (worker or Azure Function) is needed to prevent unbounded table growth.  This is out of scope for the initial implementation — a row-count alert at 100k rows per user is sufficient as an interim control.
 - Document RAG records in `ao_long_term_memory` get `user_id = 'system'` on migration — no functional change.
+
+---
+
+## How to query
+
+Connect to the PostgreSQL database (connection string in `DATABASE_URL` env var) and run:
+
+```sql
+-- All recent memories for a user across all agents
+SELECT memory_type, agent_name, memory_key,
+       LEFT(content, 120) AS content_preview,
+       created_at
+FROM ao_user_memory
+WHERE app_id = 'rag_search'          -- or 'graph_compliance'
+  AND user_id = '<oidc-sub-claim>'
+ORDER BY created_at DESC
+LIMIT 20;
+
+-- Latest preference value for a structured key
+SELECT content
+FROM ao_user_memory
+WHERE app_id = 'rag_search'
+  AND user_id = '<oidc-sub-claim>'
+  AND memory_key = 'preferred_topic'
+  AND memory_type = 'preference'
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- Count memories per user (for monitoring unbounded growth)
+SELECT user_id, COUNT(*) AS row_count
+FROM ao_user_memory
+WHERE app_id = 'rag_search'
+GROUP BY user_id
+ORDER BY row_count DESC;
+```
+
+During development when EasyAuth is not enabled, `user_id = 'system'` is used
+for all unauthenticated requests.  See the EasyAuth note below.
+
+---
+
+## EasyAuth requirement for real user identities
+
+`ao.identity.extract.extract_identity()` reads the bearer token from either:
+- `X-MS-TOKEN-AAD-ACCESS-TOKEN` — injected by **ACA EasyAuth** when token store is enabled
+- `Authorization: Bearer <token>` — direct API callers (e.g. APIM, mobile clients)
+
+**Without EasyAuth, browser users are always identified as `user_id = "system"`.**
+
+To enable EasyAuth on a container app via Terraform, add an
+`azurerm_container_app_auth_config` resource with the Microsoft provider and set
+`unauthenticated_action = "RedirectToLoginPage"` (enforces login) or
+`"AllowAnonymous"` (passthrough — injects headers only when user is already
+signed in).  The latter is recommended for APIs consumed by both browsers and
+service-to-service callers.
+
+Until EasyAuth is configured, per-user memory is operational but all rows carry
+`user_id = 'system'`.  No data migration is needed when EasyAuth is enabled; new
+rows will start using real sub claims automatically.
