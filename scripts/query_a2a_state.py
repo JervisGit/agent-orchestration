@@ -1,6 +1,14 @@
 """
 Query agent-to-agent (A2A) runtime state tables.
 
+How to run
+----------
+    # from the repo root (Windows)
+    .venv\Scripts\python.exe scripts\query_a2a_state.py
+
+    # from the repo root (macOS / Linux)
+    .venv/bin/python scripts/query_a2a_state.py
+
 Tables of interest
 ------------------
 checkpoints         – LangGraph checkpoint records per thread/run
@@ -74,22 +82,15 @@ async def main() -> None:
         if "ao_workflow_runs" in tables:
             print("\n=== AO_WORKFLOW_RUNS (latest 20 rows) ===")
             cur = await conn.execute(
-                "SELECT run_id, app_id, workflow_id, status, "
-                "started_at, completed_at "
+                "SELECT run_id, workflow_id, status, created_at "
                 "FROM ao_workflow_runs "
-                "ORDER BY started_at DESC LIMIT 20"
+                "ORDER BY created_at DESC LIMIT 20"
             )
             rows_data = await cur.fetchall()
             if rows_data:
                 for r in rows_data:
-                    duration = (
-                        f"  dur={(r[5]-r[4]).total_seconds():.1f}s"
-                        if r[4] and r[5]
-                        else ""
-                    )
                     print(
-                        f"  [{r[3]:10s}] run={r[0][:8]}  app={r[1]}  "
-                        f"wf={r[2]}{duration}"
+                        f"  [{r[2]:10s}] run={r[0][:8]}  wf={r[1]}  at={r[3]}"
                     )
             else:
                 print("  (no rows yet)")
@@ -99,9 +100,9 @@ async def main() -> None:
             print("\n=== AO_HITL_REQUESTS (all rows) ===")
             cur = await conn.execute(
                 "SELECT request_id, workflow_id, step_name, status, "
-                "requested_at, resolved_at "
+                "created_at, resolved_at "
                 "FROM ao_hitl_requests "
-                "ORDER BY requested_at DESC"
+                "ORDER BY created_at DESC"
             )
             for r in await cur.fetchall():
                 resolved = f"  resolved={r[5]}" if r[5] else ""

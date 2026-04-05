@@ -1,6 +1,14 @@
 """
 Query long-term user memory stored in ao_user_memory.
 
+How to run
+----------
+    # from the repo root (Windows)
+    .venv\Scripts\python.exe scripts\query_user_memory.py
+
+    # from the repo root (macOS / Linux)
+    .venv/bin/python scripts/query_user_memory.py
+
 Table: ao_user_memory
 ---------------------
 id           – UUID primary key
