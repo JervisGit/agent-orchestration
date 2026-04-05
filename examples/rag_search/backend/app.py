@@ -33,7 +33,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from ao.identity.extract import extract_identity, get_user_id
+from ao.identity.extract import extract_identity, get_display_name, get_user_id
 from ao.memory.long_term import LongTermMemory
 from ao.memory.user_memory import UserMemory
 from ao.policy.engine import PolicyEngine
@@ -441,6 +441,21 @@ class SearchRequest(BaseModel):
     query: str
 
 # ── Endpoints ─────────────────────────────────────────────────────────
+
+@app.get("/api/me")
+async def api_me(request: Request):
+    """Return the authenticated user's display name and email.
+
+    Reads the X-MS-CLIENT-PRINCIPAL headers injected by ACA EasyAuth (no
+    Token Store required).  Returns ``{"authenticated": false}`` for
+    unauthenticated requests so the frontend badge can stay hidden.
+    """
+    identity = extract_identity(request)
+    name, email = get_display_name(identity)
+    if not email and not name:
+        return {"authenticated": False}
+    return {"authenticated": True, "name": name, "email": email}
+
 
 @app.post("/api/documents")
 async def ingest_document(doc: DocumentIn):

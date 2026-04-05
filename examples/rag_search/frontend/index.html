@@ -152,16 +152,15 @@
 <script>
 const API = '';
 
-// ─── User profile (EasyAuth) ───
+// ─── User profile (EasyAuth via /api/me) ───
 async function loadUserProfile() {
   try {
-    const r = await fetch('/.auth/me');
+    const r = await fetch('/api/me');
     if (!r.ok) return;
     const data = await r.json();
-    const p = Array.isArray(data) ? data[0] : data;
-    if (!p) return;
-    const raw = p.user_id || p.userDetails || '';
-    const display = raw.includes('@') ? raw.split('@')[0] : raw;
+    if (!data.authenticated) return;
+    const display = data.name || (data.email ? data.email.split('@')[0] : '');
+    if (!display) return;
     const initials = display.slice(0, 2).toUpperCase();
     document.getElementById('userInitials').textContent = initials;
     document.getElementById('userName').textContent = display;

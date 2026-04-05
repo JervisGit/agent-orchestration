@@ -49,6 +49,25 @@ def extract_identity(request) -> IdentityContext:
         if auth_header.startswith("Bearer "):
             access_token = auth_header[7:]
 
+    # ── EasyAuth (no token store): ACA sidecar injects principal headers ─
+    # When the Token Store is not configured, ACA EasyAuth injects
+    # X-MS-CLIENT-PRINCIPAL (base64 JSON) and X-MS-CLIENT-PRINCIPAL-NAME
+    # (email) but does NOT inject X-MS-TOKEN-AAD-ACCESS-TOKEN.
+    if not access_token:
+        principal_claims = _decode_client_principal(request)
+        if principal_claims:
+            tenant_id = principal_claims.get("tid", "")
+            logger.debug(
+                "Extracted user identity (principal header) sub=%s tid=%s",
+                principal_claims.get("sub", "unknown"),
+                tenant_id,
+            )
+            return IdentityContext(
+                mode=IdentityMode.USER_DELEGATED,
+                tenant_id=tenant_id,
+                claims=principal_claims,
+            )
+
     if not access_token:
         # No token present — return a service-mode system identity.
         # Audit log entries will show user_id="system" for unauthenticated requests.
@@ -101,3 +120,71 @@ def _decode_jwt_claims(token: str) -> dict:
     except Exception as exc:
         logger.debug("Could not decode JWT claims (non-critical): %s", exc)
         return {}
+
+
+def _decode_client_principal(request) -> dict:
+    """Decode the X-MS-CLIENT-PRINCIPAL header injected by ACA EasyAuth.
+
+    The header is a base64-encoded JSON object whose ``claims`` array uses
+    WS-Federation ``typ``/``val`` pairs.  We normalise them into a flat dict
+    that mirrors the JWT claims shape expected by the rest of the codebase.
+
+    Returns an empty dict when the header is absent or cannot be decoded.
+    """
+    raw = request.headers.get("X-MS-CLIENT-PRINCIPAL", "")
+    if not raw:
+        return {}
+    try:
+        raw += "=" * ((4 - len(raw) % 4) % 4)
+        principal = json.loads(base64.b64decode(raw).decode("utf-8"))
+        flat: dict = {}
+        for claim in principal.get("claims", []):
+            typ = claim.get("typ", "")
+            val = claim.get("val", "")
+            # Map WS-Fed long URN types to short names where useful
+            if typ == "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier":
+                flat.setdefault("sub", val)
+            elif typ == "http://schemas.microsoft.com/identity/claims/objectidentifier":
+                flat.setdefault("sub", val)
+            elif typ == "http://schemas.microsoft.com/identity/claims/tenantid":
+                flat.setdefault("tid", val)
+            elif typ == "preferred_username":
+                flat.setdefault("preferred_username", val)
+            elif typ == "name":
+                flat.setdefault("name", val)
+            elif typ == "oid":
+                flat.setdefault("sub", val)
+            elif typ == "tid":
+                flat.setdefault("tid", val)
+            else:
+                # Keep short-name claims as-is
+                if "/" not in typ:
+                    flat[typ] = val
+        # Fallback: X-MS-CLIENT-PRINCIPAL-NAME is the email/UPN
+        if "preferred_username" not in flat:
+            upn = request.headers.get("X-MS-CLIENT-PRINCIPAL-NAME", "")
+            if upn:
+                flat["preferred_username"] = upn
+        if "sub" not in flat:
+            oid = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "")
+            if oid:
+                flat["sub"] = oid
+        return flat
+    except Exception as exc:
+        logger.debug("Could not decode X-MS-CLIENT-PRINCIPAL (non-critical): %s", exc)
+        return {}
+
+
+def get_display_name(identity: IdentityContext | None) -> tuple[str, str]:
+    """Return ``(display_name, email)`` for the given identity.
+
+    Falls back to empty strings for unauthenticated (system) identities.
+    """
+    if identity is None or not identity.claims:
+        return "", ""
+    claims = identity.claims
+    name = claims.get("name", "")
+    email = claims.get("preferred_username", claims.get("email", ""))
+    if not name:
+        name = email.split("@")[0] if "@" in email else email
+    return name, email
