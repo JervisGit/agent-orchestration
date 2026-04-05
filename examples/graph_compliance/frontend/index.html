@@ -97,13 +97,38 @@
   .stats-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
   .stat { background: #f3f2f1; padding: 6px 12px; border-radius: 2px; font-size: 12px; }
   .stat strong { color: #0078d4; }
+
+  /* ── HITL toggle (header) ── */
+  .hitl-label { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; color: rgba(255,255,255,.9); cursor: pointer; white-space: nowrap; user-select: none; }
+  .hitl-label input[type=checkbox] { display: none; }
+  .hitl-slider { width: 36px; height: 20px; background: rgba(255,255,255,.35); border-radius: 10px; position: relative; transition: background .2s; flex-shrink: 0; }
+  .hitl-slider::after { content: ''; position: absolute; width: 16px; height: 16px; background: #fff; border-radius: 50%; top: 2px; left: 2px; transition: transform .2s; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+  .hitl-label input:checked + .hitl-slider { background: #ffb900; }
+  .hitl-label input:checked + .hitl-slider::after { transform: translateX(16px); }
+
+  /* ── HITL approval modal ── */
+  .hitl-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+  .hitl-modal { background: #fff; border-radius: 4px; box-shadow: 0 8px 32px rgba(0,0,0,.25); padding: 28px 32px; max-width: 540px; width: 90%; }
+  .hitl-modal h3 { font-size: 17px; font-weight: 700; margin-bottom: 6px; color: #323130; }
+  .hitl-modal .hitl-desc { font-size: 13px; color: #605e5c; margin-bottom: 14px; }
+  .hitl-modal pre { background: #f8f8f8; border: 1px solid #e1dfdd; border-radius: 2px; padding: 10px 12px; font-size: 12px; font-family: 'Cascadia Code', Consolas, monospace; max-height: 220px; overflow-y: auto; white-space: pre-wrap; margin-bottom: 20px; color: #222; }
+  .hitl-modal .hitl-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  .hitl-approve { background: #107c10; color: #fff; border: none; border-radius: 2px; padding: 9px 22px; font-size: 14px; cursor: pointer; font-weight: 600; }
+  .hitl-approve:hover { background: #0b6f0b; }
+  .hitl-reject  { background: #fff; color: #d13438; border: 1px solid #d13438; border-radius: 2px; padding: 9px 22px; font-size: 14px; cursor: pointer; font-weight: 600; }
+  .hitl-reject:hover  { background: #fde7e9; }
 </style>
 </head>
 <body>
 <header>
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" fill="white"/><line x1="12" y1="2" x2="12" y2="7" stroke="white" stroke-width="2"/><line x1="12" y1="17" x2="12" y2="22" stroke="white" stroke-width="2"/><line x1="2" y1="12" x2="7" y2="12" stroke="white" stroke-width="2"/><line x1="17" y1="12" x2="22" y2="12" stroke="white" stroke-width="2"/><line x1="5.5" y1="5.5" x2="8.5" y2="8.5" stroke="white" stroke-width="2"/><line x1="15.5" y1="15.5" x2="18.5" y2="18.5" stroke="white" stroke-width="2"/><line x1="18.5" y1="5.5" x2="15.5" y2="8.5" stroke="white" stroke-width="2"/><line x1="8.5" y1="15.5" x2="5.5" y2="18.5" stroke="white" stroke-width="2"/></svg>
   <h1>Graph Compliance Investigation</h1>
-  <span>Powered by AO — Supervisor pattern + NetworkX knowledge graph</span>
+  <span>Powered by AO &mdash; Supervisor pattern + NetworkX knowledge graph</span>
+  <label class="hitl-label" title="Human-in-the-Loop: when on, every tool call requires manual approval before execution">
+    <input type="checkbox" id="hitlToggle" onchange="onHitlToggle()">
+    <span class="hitl-slider"></span>
+    HITL
+  </label>
 </header>
 
 <div class="container">
@@ -189,6 +214,19 @@
     </div>
     </div><!-- /investigatePanel -->
   </div><!-- /main-panel -->
+</div>
+
+<!-- ── HITL approval modal ── -->
+<div id="hitlOverlay" class="hitl-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="hitlTitle">
+  <div class="hitl-modal">
+    <h3 id="hitlTitle">&#x2713; Tool Approval Required</h3>
+    <p class="hitl-desc">The agent wants to call the tool below. Review the arguments then approve or reject.</p>
+    <pre id="hitlDetail"></pre>
+    <div class="hitl-actions">
+      <button class="hitl-reject" onclick="resolveHitl(false)">Reject</button>
+      <button class="hitl-approve" onclick="resolveHitl(true)">Approve</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -366,12 +404,53 @@ function doInvestigate() {
       document.getElementById('investigateBtn').disabled = false;
       es.close();
     }
+
+    if (msg.type === 'hitl_pending') {
+      showHitlModal(msg.request_id, msg.step_name, msg.payload);
+    }
   };
   es.onerror = () => { document.getElementById('investigateBtn').disabled = false; es.close(); };
 }
 
 function escHtml(t) {
   return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ─── HITL ───
+let _pendingHitlId = null;
+
+async function onHitlToggle() {
+  const enabled = document.getElementById('hitlToggle').checked;
+  try {
+    await fetch(`${API}/api/hitl/mode`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ enabled }),
+    });
+  } catch(e) { /* non-critical — backend may be unavailable */ }
+}
+
+function showHitlModal(requestId, stepName, payload) {
+  _pendingHitlId = requestId;
+  const argsText = payload && payload.args
+    ? JSON.stringify(payload.args, null, 2)
+    : JSON.stringify(payload, null, 2);
+  document.getElementById('hitlDetail').textContent = `Tool: ${stepName}\n\nArguments:\n${argsText}`;
+  document.getElementById('hitlOverlay').style.display = '';
+}
+
+async function resolveHitl(approved) {
+  if (!_pendingHitlId) return;
+  document.getElementById('hitlOverlay').style.display = 'none';
+  const id = _pendingHitlId;
+  _pendingHitlId = null;
+  try {
+    await fetch(`${API}/api/hitl/${id}/resolve`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ approved }),
+    });
+  } catch(e) { /* non-critical */ }
 }
 
 // ─── Tab switching ───

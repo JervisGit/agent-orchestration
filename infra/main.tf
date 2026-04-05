@@ -143,6 +143,8 @@ module "aca" {
   apim_gateway_url                = try(module.apim[0].apim_gateway_url, "")
   apim_scope                      = try(module.apim[0].apim_app_identifier_uri, "") != "" ? "${try(module.apim[0].apim_app_identifier_uri, "")}/.default" : ""
   apim_taxpayer_url               = try(module.apim[0].apim_gateway_url, "") != "" ? "${try(module.apim[0].apim_gateway_url, "")}/agents/taxpayer" : ""
+  easyauth_client_id              = var.easyauth_client_id
+  easyauth_client_secret          = var.easyauth_client_secret
   tags                            = var.tags
 }
 

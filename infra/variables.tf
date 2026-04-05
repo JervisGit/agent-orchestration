@@ -166,3 +166,23 @@ variable "enable_no_role_test_sp" {
   description = "Create a no-role test service principal for confirming APIM returns 403. Set false in production."
 }
 
+# ── EasyAuth (Container Apps built-in authentication) ──────────────
+# When set, provisions azurerm_container_app_auth_config for the
+# rag-search and graph-compliance apps.  Users who authenticate via
+# the browser get X-MS-TOKEN-AAD-ACCESS-TOKEN injected so that
+# extract_identity() in each app.py can read their identity (ADR-018).
+# Leave both empty to skip EasyAuth (default, API calls are allowed).
+
+variable "easyauth_client_id" {
+  type        = string
+  default     = ""
+  description = "Entra app registration client ID for EasyAuth on rag-search and graph-compliance."
+}
+
+variable "easyauth_client_secret" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Entra app registration client secret for EasyAuth."
+}
+

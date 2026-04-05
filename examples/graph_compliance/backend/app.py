@@ -16,6 +16,7 @@ Query:
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -32,6 +33,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from ao.hitl.manager import ApprovalMode, ApprovalRequest, ApprovalStatus, HITLChannel, HITLManager
 from ao.identity.extract import extract_identity, get_user_id
 from ao.memory.user_memory import UserMemory
 from ao.policy.engine import PolicyEngine
@@ -82,6 +84,56 @@ llm      = _runtime.llm
 
 # ── Per-user long-term memory (ADR-018) ──────────────────────────────
 _user_memory = UserMemory(connection_string=DATABASE_URL, app_id=APP_ID)
+
+# ── Human-in-the-Loop (ADR-012) ──────────────────────────────────────
+# _hitl_enabled is toggled via POST /api/hitl/mode.  When True, every
+# registered tool call blocks until a human approves it via the frontend
+# toggle + modal.  The SSEHITLChannel forwards the pending-approval event
+# into the active trace's token_queue so the client can render the modal.
+
+_current_trace_id: contextvars.ContextVar[str] = contextvars.ContextVar("trace_id", default="")
+_hitl_queues: dict[str, asyncio.Queue] = {}
+_hitl_enabled: bool = False
+
+
+class _SSEHITLChannel(HITLChannel):
+    """Forwards HITL pending-approval events into the active SSE queue."""
+
+    async def notify(self, request: ApprovalRequest) -> None:
+        q = _hitl_queues.get(request.workflow_id)
+        if q:
+            try:
+                await q.put({
+                    "hitl_pending": True,
+                    "request_id": request.id,
+                    "step_name": request.step_name,
+                    "payload": request.payload,
+                })
+            except asyncio.QueueFull:
+                pass
+
+
+_hitl_manager = HITLManager(default_mode=ApprovalMode.AUTO, channels=[_SSEHITLChannel()])
+
+
+def _hitl_wrap(tool_name: str, fn):
+    """Return an async wrapper that gates fn behind HITL approval when enabled."""
+    async def wrapper(**kwargs):
+        if _hitl_enabled:
+            trace_id = _current_trace_id.get("")
+            req = await _hitl_manager.request_approval(
+                workflow_id=trace_id,
+                step_name=tool_name,
+                payload={"tool": tool_name, "args": kwargs},
+                mode=ApprovalMode.REQUIRED,
+            )
+            if req.status != ApprovalStatus.APPROVED:
+                return {"content": f"Tool '{tool_name}' rejected by reviewer.", "state": {}}
+        if asyncio.iscoroutinefunction(fn):
+            return await fn(**kwargs)
+        return fn(**kwargs)
+    return wrapper
+
 
 # ── Tool schemas ──────────────────────────────────────────────────────
 
@@ -135,13 +187,14 @@ _GET_RISK_SCHEMA: dict = {
     },
 }
 
-# ── Register tools (NetworkX-backed) ──────────────────────────────────
+# ── Register tools (NetworkX-backed, HITL-wrapped) ───────────────────
 # ADR-015: In production, these callables would call Neo4j Cypher queries.
-# The agents are completely decoupled — only these four lines change.
-executor.register_tool("find_entity",       find_entity,       _FIND_ENTITY_SCHEMA)
-executor.register_tool("get_neighbors",     get_neighbors,     _GET_NEIGHBORS_SCHEMA)
-executor.register_tool("find_path",         find_path,         _FIND_PATH_SCHEMA)
-executor.register_tool("get_risk_indicators", get_risk_indicators, _GET_RISK_SCHEMA)
+# _hitl_wrap() adds an approval gate when _hitl_enabled is True — the
+# wrapper is transparent (AUTO mode) otherwise.
+executor.register_tool("find_entity",         _hitl_wrap("find_entity",         find_entity),         _FIND_ENTITY_SCHEMA)
+executor.register_tool("get_neighbors",       _hitl_wrap("get_neighbors",       get_neighbors),       _GET_NEIGHBORS_SCHEMA)
+executor.register_tool("find_path",           _hitl_wrap("find_path",           find_path),           _FIND_PATH_SCHEMA)
+executor.register_tool("get_risk_indicators", _hitl_wrap("get_risk_indicators", get_risk_indicators), _GET_RISK_SCHEMA)
 
 # compile() is deferred to lifespan() so the PostgreSQL checkpointer (ADR-019)
 # is set up first.  executor.astream() / ainvoke() use self._compiled internally.
@@ -225,6 +278,15 @@ app.add_middleware(
 
 class InvestigateRequest(BaseModel):
     query: str
+
+
+class HitlModeRequest(BaseModel):
+    enabled: bool
+
+
+class HitlResolveRequest(BaseModel):
+    approved: bool
+    note: str = ""
 
 # ── Endpoints ─────────────────────────────────────────────────────────
 
@@ -322,6 +384,10 @@ async def investigate_stream(request: Request, q: str = Query(..., min_length=1)
                         if isinstance(updates, dict):
                             final_state.update(updates)
 
+        # Propagate trace_id via ContextVar so _hitl_wrap() wrappers can look
+        # up this trace's token_queue.  create_task() inherits the context.
+        _trace_token = _current_trace_id.set(trace_id)
+        _hitl_queues[trace_id] = token_queue
         graph_task = asyncio.create_task(_run_graph())
 
         while not graph_task.done() or not token_queue.empty():
@@ -332,6 +398,9 @@ async def investigate_stream(request: Request, q: str = Query(..., min_length=1)
                 continue
             if item is None:
                 break
+            if item.get("hitl_pending"):
+                yield f"data: {json.dumps({'type': 'hitl_pending', 'request_id': item['request_id'], 'step_name': item['step_name'], 'payload': item['payload']})}\n\n"
+                continue
             if "reasoning" in item:
                 yield f"data: {json.dumps({'type': 'reasoning', 'node': item['node'], 'text': item['reasoning']})}\n\n"
             elif "token" in item:
@@ -378,6 +447,8 @@ async def investigate_stream(request: Request, q: str = Query(..., min_length=1)
                 yield f"data: {json.dumps(step_evt)}\n\n"
 
         await graph_task
+        _current_trace_id.reset(_trace_token)
+        _hitl_queues.pop(trace_id, None)
 
         post_eval = await policy_engine.evaluate(
             PolicyStage.POST_EXECUTION, policies, {"input": q, "output": final_state.get("output", "")}
@@ -459,6 +530,42 @@ async def investigate(request: Request, body: InvestigateRequest):
         "iterations": result.get("iterations", 0),
         "trace_id": trace_id,
     }
+
+
+# ── HITL endpoints ────────────────────────────────────────────────────
+
+@app.post("/api/hitl/mode")
+async def set_hitl_mode(body: HitlModeRequest):
+    """Enable or disable per-tool HITL approval for all active and future investigations."""
+    global _hitl_enabled
+    _hitl_enabled = body.enabled
+    logger.info("HITL mode set to %s", "enabled" if _hitl_enabled else "disabled")
+    return {"hitl_enabled": _hitl_enabled}
+
+
+@app.get("/api/hitl/pending")
+async def get_pending_hitl():
+    """Return all currently pending HITL approval requests."""
+    return {
+        "pending": [
+            {
+                "id": r.id,
+                "step_name": r.step_name,
+                "payload": r.payload,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in _hitl_manager.pending_requests
+        ]
+    }
+
+
+@app.post("/api/hitl/{request_id}/resolve")
+async def resolve_hitl(request_id: str, body: HitlResolveRequest):
+    """Approve or reject a pending HITL request (called by the frontend modal)."""
+    req = _hitl_manager.resolve(request_id, approved=body.approved, note=body.note)
+    if not req:
+        raise HTTPException(status_code=404, detail="Approval request not found or already resolved")
+    return {"status": req.status.value, "request_id": req.id}
 
 
 @app.get("/healthz")
