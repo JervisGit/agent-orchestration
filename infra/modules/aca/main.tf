@@ -463,13 +463,6 @@ resource "azurerm_container_app" "rag_search" {
       value = var.rag_search_langfuse_secret_key
     }
   }
-  dynamic "secret" {
-    for_each = var.easyauth_client_id != "" ? [1] : []
-    content {
-      name  = "microsoft-provider-authentication-secret"
-      value = var.easyauth_client_secret
-    }
-  }
 
   template {
     min_replicas = 0
@@ -572,13 +565,6 @@ resource "azurerm_container_app" "graph_compliance" {
       value = var.graph_compliance_langfuse_secret_key
     }
   }
-  dynamic "secret" {
-    for_each = var.easyauth_client_id != "" ? [1] : []
-    content {
-      name  = "microsoft-provider-authentication-secret"
-      value = var.easyauth_client_secret
-    }
-  }
 
   template {
     min_replicas = 0
@@ -643,69 +629,23 @@ resource "azurerm_container_app" "graph_compliance" {
 
 # ── EasyAuth (Azure Container Apps built-in authentication) ────────
 #
-# Uses unauthenticated_client_action = "AllowAnonymous" so API
-# (service-to-service) calls are never blocked.  Authenticated browser
-# sessions get X-MS-TOKEN-AAD-ACCESS-TOKEN injected; extract_identity()
-# in app.py reads that header to populate the IdentityContext (ADR-018).
-# Set easyauth_client_id = "" to skip provisioning entirely (default).
-
-resource "azurerm_container_app_auth_config" "rag_search" {
-  count            = var.easyauth_client_id != "" ? 1 : 0
-  container_app_id = azurerm_container_app.rag_search.id
-
-  platform {
-    enabled         = true
-    runtime_version = "~1"
-  }
-
-  global_validation {
-    unauthenticated_client_action = "AllowAnonymous"
-  }
-
-  identity_providers {
-    azure_active_directory {
-      registration {
-        client_id                  = var.easyauth_client_id
-        client_secret_setting_name = "microsoft-provider-authentication-secret"
-      }
-      validation {
-        allowed_audiences = [
-          "api://${var.easyauth_client_id}",
-          var.easyauth_client_id,
-        ]
-      }
-    }
-  }
-}
-
-resource "azurerm_container_app_auth_config" "graph_compliance" {
-  count            = var.easyauth_client_id != "" ? 1 : 0
-  container_app_id = azurerm_container_app.graph_compliance.id
-
-  platform {
-    enabled         = true
-    runtime_version = "~1"
-  }
-
-  global_validation {
-    unauthenticated_client_action = "AllowAnonymous"
-  }
-
-  identity_providers {
-    azure_active_directory {
-      registration {
-        client_id                  = var.easyauth_client_id
-        client_secret_setting_name = "microsoft-provider-authentication-secret"
-      }
-      validation {
-        allowed_audiences = [
-          "api://${var.easyauth_client_id}",
-          var.easyauth_client_id,
-        ]
-      }
-    }
-  }
-}
+# azurerm 4.x does not yet expose a Container Apps auth resource.
+# Configure EasyAuth via Azure CLI after terraform apply:
+#
+#   az containerapp auth microsoft update \
+#     --name ca-rag-search-dev \
+#     --resource-group rg-ao-dev \
+#     --client-id <easyauth_client_id> \
+#     --client-secret <easyauth_client_secret> \
+#     --issuer "https://sts.windows.net/<tenant_id>/v2.0" \
+#     --unauthenticated-client-action AllowAnonymous
+#
+# (repeat with --name ca-graph-compliance-dev)
+#
+# Once configured, extract_identity() in app.py reads
+# X-MS-TOKEN-AAD-ACCESS-TOKEN to populate the IdentityContext (ADR-018).
+# The easyauth_client_id / easyauth_client_secret variables are kept for
+# use as az CLI tokens; leave empty to skip EasyAuth entirely.
 
 # ── Outputs ────────────────────────────────────────────────────────
 
