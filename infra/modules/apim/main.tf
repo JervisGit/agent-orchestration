@@ -91,6 +91,20 @@ variable "agent_permissions" {
   description = "JSON string mapping agent manifest names to allowed APIM path prefixes."
 }
 
+# Per-agent Named Values (pipe-delimited allowed path prefixes) used in APIM Step 3 policy.
+# These avoid JSON double-quote substitution issues inside XML policy attributes.
+# Format: "/agents/path1|/agents/path2"
+locals {
+  agent_perm_map = {
+    "agentperm-filing-extension"  = "/agents/taxpayer"
+    "agentperm-assessment-relief" = "/agents/taxpayer"
+    "agentperm-penalty-waiver"    = "/agents/taxpayer"
+    "agentperm-supervisor"        = "/agents/taxpayer"
+    "agentperm-rag-search"        = "/agents/search"
+    "agentperm-graph-compliance"  = "/agents/compliance"
+  }
+}
+
 data "azurerm_client_config" "current" {}
 
 # ── Stable UUIDs for App Role IDs ─────────────────────────────────
@@ -261,6 +275,18 @@ resource "azurerm_api_management_named_value" "agent_permissions" {
   secret              = false
 }
 
+# Per-agent Named Values — pipe-delimited allowed path prefixes (no JSON, no quote issues).
+# Named after: agentperm-{agent-name} where underscores in agent names are replaced with hyphens.
+resource "azurerm_api_management_named_value" "agent_perm" {
+  for_each            = local.agent_perm_map
+  name                = each.key
+  resource_group_name = var.resource_group_name
+  api_management_name = azurerm_api_management.ao.name
+  display_name        = each.key
+  value               = each.value
+  secret              = false
+}
+
 # ── AO Agents API ──────────────────────────────────────────────────
 # All DSAI tool operations live under path /agents.
 # API-level policy: validate JWT audience (applies to every operation).
@@ -301,6 +327,30 @@ resource "azurerm_api_management_api_policy" "ao_agents" {
             <audience>{{apim-client-id}}</audience>
           </audiences>
         </validate-jwt>
+        <!-- ADR-013 Step 3 pre-load: read X-Agent-ID header and resolve its allowed paths
+             from a per-agent Named Value (agentperm-{agent-name}, pipe-delimited).
+             Named Values are substituted as plain strings — no JSON/quoting issues. -->
+        <set-variable name="agentId"
+                      value="@(context.Request.Headers.ContainsKey(&quot;X-Agent-ID&quot;) ? context.Request.Headers.GetValueOrDefault(&quot;X-Agent-ID&quot;, string.Empty) : string.Empty)" />
+        <set-variable name="agentAllowedPaths" value="" />
+        <choose>
+          <when condition="@((string)context.Variables[&quot;agentId&quot;] == &quot;filing_extension&quot;)"><set-variable name="agentAllowedPaths" value="{{agentperm-filing-extension}}" /></when>
+        </choose>
+        <choose>
+          <when condition="@((string)context.Variables[&quot;agentId&quot;] == &quot;assessment_relief&quot;)"><set-variable name="agentAllowedPaths" value="{{agentperm-assessment-relief}}" /></when>
+        </choose>
+        <choose>
+          <when condition="@((string)context.Variables[&quot;agentId&quot;] == &quot;penalty_waiver&quot;)"><set-variable name="agentAllowedPaths" value="{{agentperm-penalty-waiver}}" /></when>
+        </choose>
+        <choose>
+          <when condition="@((string)context.Variables[&quot;agentId&quot;] == &quot;supervisor&quot;)"><set-variable name="agentAllowedPaths" value="{{agentperm-supervisor}}" /></when>
+        </choose>
+        <choose>
+          <when condition="@((string)context.Variables[&quot;agentId&quot;] == &quot;rag_search&quot;)"><set-variable name="agentAllowedPaths" value="{{agentperm-rag-search}}" /></when>
+        </choose>
+        <choose>
+          <when condition="@((string)context.Variables[&quot;agentId&quot;] == &quot;graph_compliance&quot;)"><set-variable name="agentAllowedPaths" value="{{agentperm-graph-compliance}}" /></when>
+        </choose>
         <base />
       </inbound>
       <backend><base /></backend>
@@ -356,26 +406,11 @@ resource "azurerm_api_management_api_operation_policy" "taxpayer_lookup" {
             </claim>
           </required-claims>
         </validate-jwt>
-        <!-- Step 3 (ADR-013 logical identity): check X-Agent-ID against AgentPermissions map.
-             X-Agent-ID is injected by ManifestExecutor from the manifest agent name — never from user input.
-             AgentPermissions is a Named Value substituted as a raw string — avoids embedding
-             JSON with unescaped " inside a C# string literal. -->
-        <set-variable name="agentId"
-                      value="@(context.Request.Headers.GetValueOrDefault(&quot;X-Agent-ID&quot;, &quot;Unknown&quot;))" />
-        <set-variable name="agentPermissionsJson" value="{{AgentPermissions}}" />
+        <!-- Step 3 (ADR-013 logical identity): check X-Agent-ID against per-agent allowed paths.
+             agentAllowedPaths was pre-loaded in the API-level policy from a per-agent Named Value.
+             Empty string means agent not in map — block. -->
         <choose>
-          <when condition="@{
-              var id   = (string)context.Variables[&quot;agentId&quot;];
-              var path = context.Request.Url.Path.ToLower();
-              try {
-                  var perms = JObject.Parse((string)context.Variables[&quot;agentPermissionsJson&quot;]);
-                  if (perms.ContainsKey(id)) {
-                      var allowed = perms[id].ToObject&lt;List&lt;string&gt;&gt;();
-                      return !allowed.Any(p =&gt; path.StartsWith(p.ToLower()));
-                  }
-              } catch { }
-              return true;
-          }">
+          <when condition="@(string.IsNullOrEmpty((string)context.Variables[&quot;agentAllowedPaths&quot;]) || !((string)context.Variables[&quot;agentAllowedPaths&quot;]).Split('|').Any(p => context.Request.Url.Path.ToLower().StartsWith(p.Trim().ToLower())))">
             <return-response>
               <set-status code="403" reason="Forbidden" />
               <set-body>@(&quot;Access denied for Agent: &quot; + (string)context.Variables[&quot;agentId&quot;])</set-body>
