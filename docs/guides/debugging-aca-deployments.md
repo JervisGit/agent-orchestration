@@ -188,3 +188,40 @@ Invoke-RestMethod -Uri "https://<host>/api/emails/<id>/cancel" -Method POST
 # Reset a stuck email
 Invoke-RestMethod -Uri "https://<host>/api/emails/<id>/reset" -Method POST
 ```
+
+---
+
+## Check All App Health States (Snapshot)
+
+Run this command to get a quick health overview of every Container App at once:
+
+```powershell
+# List all apps with their latest revision and provisioning state
+az containerapp list `
+  --resource-group rg-ao-dev `
+  --subscription 78205397-1833-43c4-977e-d177b245a3ad `
+  --query "[].{name:name, latestRevision:properties.latestRevisionName, provisioningState:properties.provisioningState}" `
+  -o table
+```
+
+Then verify the health state of each latest revision individually. Replace `<app-name>` and `<revision-name>` from the table above:
+
+```powershell
+az containerapp revision show `
+  --name <app-name> `
+  --resource-group rg-ao-dev `
+  --revision <revision-name> `
+  --query "{state:properties.healthState, active:properties.active, replicas:properties.replicas}" `
+  -o json
+```
+
+Expected output when healthy:
+```json
+{
+  "active": true,
+  "replicas": 1,
+  "state": "Healthy"
+}
+```
+
+> If `state` is `Unhealthy`, check startup logs for the revision using step 2 in the Diagnostic Flow above. Common cause: missing `__main__.py` entrypoint (worker apps), import errors, or failing health probes.
