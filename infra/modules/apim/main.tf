@@ -87,21 +87,23 @@ variable "tags" { type = map(string) }
 # Stored as a APIM Named Value (AgentPermissions) — update without Terraform re-apply once deployed.
 variable "agent_permissions" {
   type = string
-  default = "{\"filing_extension\":[\"/agents/taxpayer\"],\"assessment_relief\":[\"/agents/taxpayer\"],\"penalty_waiver\":[\"/agents/taxpayer\"],\"supervisor\":[\"/agents/taxpayer\"],\"rag_search\":[\"/agents/search\"],\"graph_compliance\":[\"/agents/compliance\"]}"
-  description = "JSON string mapping agent manifest names to allowed APIM path prefixes."
+  default = "{\"filing_extension\":[\"taxpayer\"],\"assessment_relief\":[\"taxpayer\"],\"penalty_waiver\":[\"taxpayer\"],\"supervisor\":[\"taxpayer\"],\"rag_search\":[\"search\"],\"graph_compliance\":[\"compliance\"]}"
+  description = "JSON string mapping agent manifest names to allowed APIM path prefixes (relative to API base path, no leading slash)."
 }
 
 # Per-agent Named Values (pipe-delimited allowed path prefixes) used in APIM Step 3 policy.
 # These avoid JSON double-quote substitution issues inside XML policy attributes.
-# Format: "/agents/path1|/agents/path2"
+# Format: "path1|path2" — paths are RELATIVE to the API base path, no leading slash.
+# APIM context.Request.Url.Path returns the path WITHOUT the API prefix and WITHOUT
+# a leading slash (e.g. for /agents/taxpayer/{tin} it returns "taxpayer/{tin}").
 locals {
   agent_perm_map = {
-    "agentperm-filing-extension"  = "/agents/taxpayer"
-    "agentperm-assessment-relief" = "/agents/taxpayer"
-    "agentperm-penalty-waiver"    = "/agents/taxpayer"
-    "agentperm-supervisor"        = "/agents/taxpayer"
-    "agentperm-rag-search"        = "/agents/search"
-    "agentperm-graph-compliance"  = "/agents/compliance"
+    "agentperm-filing-extension"  = "taxpayer"
+    "agentperm-assessment-relief" = "taxpayer"
+    "agentperm-penalty-waiver"    = "taxpayer"
+    "agentperm-supervisor"        = "taxpayer"
+    "agentperm-rag-search"        = "search"
+    "agentperm-graph-compliance"  = "compliance"
   }
 }
 
