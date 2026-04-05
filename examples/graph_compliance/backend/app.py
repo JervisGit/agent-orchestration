@@ -27,11 +27,13 @@ from pathlib import Path
 from typing import TypedDict
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from ao.identity.extract import extract_identity, get_user_id
+from ao.memory.user_memory import UserMemory
 from ao.policy.engine import PolicyEngine
 from ao.policy.schema import PolicySet, PolicyStage
 from ao.runtime import AppRuntime
@@ -54,6 +56,7 @@ except (IndexError, OSError):
 FRONTEND_DIR  = Path(__file__).parent.parent / "frontend"
 MANIFEST_PATH = Path(__file__).parent.parent / "ao-manifest.yaml"
 APP_ID        = "graph_compliance"
+DATABASE_URL  = os.getenv("DATABASE_URL", "postgresql://ao:localdev@localhost:5432/ao")
 
 # ── Structured logging ────────────────────────────────────────────────
 def _configure_logging() -> None:
@@ -76,6 +79,9 @@ logger = logging.getLogger("graph_compliance")
 _runtime = AppRuntime.from_env(MANIFEST_PATH)
 executor = _runtime.executor
 llm      = _runtime.llm
+
+# ── Per-user long-term memory (ADR-018) ──────────────────────────────
+_user_memory = UserMemory(connection_string=DATABASE_URL, app_id=APP_ID)
 
 # ── Tool schemas ──────────────────────────────────────────────────────
 
@@ -137,7 +143,8 @@ executor.register_tool("get_neighbors",     get_neighbors,     _GET_NEIGHBORS_SC
 executor.register_tool("find_path",         find_path,         _FIND_PATH_SCHEMA)
 executor.register_tool("get_risk_indicators", get_risk_indicators, _GET_RISK_SCHEMA)
 
-compiled_graph = executor.compile(state_schema=dict)
+# compile() is deferred to lifespan() so the PostgreSQL checkpointer (ADR-019)
+# is set up first.  executor.astream() / ainvoke() use self._compiled internally.
 
 # ── Policy engine ─────────────────────────────────────────────────────
 policy_engine = PolicyEngine()
@@ -166,6 +173,7 @@ class ComplianceState(TypedDict):
     iterations: int
     trace_id: str
     policy_flags: list[str]
+    _identity: object | None    # IdentityContext injected by endpoint; propagated to tools
 
 # ── Step labels ───────────────────────────────────────────────────────
 
@@ -184,6 +192,19 @@ STEP_LABELS: dict[str, str] = {
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # PostgreSQL checkpointer for durable agent-to-agent state (ADR-019)
+    try:
+        await executor.setup_pg_checkpointer(DATABASE_URL)
+    except Exception as exc:
+        logger.warning("PostgreSQL checkpointer unavailable, falling back to MemorySaver: %s", exc)
+    executor.compile(state_schema=dict)
+
+    # Per-user long-term memory (ADR-018)
+    try:
+        await _user_memory.initialize()
+    except Exception as exc:
+        logger.warning("UserMemory init failed (DB may not be available): %s", exc)
+
     stats = graph_stats()
     print(
         f"Graph Compliance ready — {stats['node_count']} nodes, {stats['edge_count']} edges | "
@@ -265,8 +286,10 @@ def _entity_tooltip(e: dict) -> str:
 
 
 @app.get("/api/investigate/stream")
-async def investigate_stream(q: str = Query(..., min_length=1)):
+async def investigate_stream(request: Request, q: str = Query(..., min_length=1)):
     """SSE: stream the compliance investigation step by step."""
+    identity = extract_identity(request)
+
     async def generate():
         trace_id = str(uuid.uuid4())
         yield f"data: {json.dumps({'type': 'start', 'trace_id': trace_id})}\n\n"
@@ -282,6 +305,7 @@ async def investigate_stream(q: str = Query(..., min_length=1)):
 
         initial_state: ComplianceState = {
             "input": q, "messages": [], "output": "",
+            "_identity": identity,
             "next_agent": "", "specialist_outputs": {}, "specialist_call_counts": {},
             "iterations": 0, "trace_id": trace_id, "policy_flags": [],
         }
@@ -362,6 +386,21 @@ async def investigate_stream(q: str = Query(..., min_length=1)):
         if post_eval.modified_data and post_eval.modified_data.get("output"):
             output = post_eval.modified_data["output"]
 
+        # Write investigation summary to per-user long-term memory (ADR-018).
+        # user_id comes from the OIDC sub claim; falls back to 'system' if unauthenticated.
+        user_id = get_user_id(identity)
+        if output:
+            try:
+                await _user_memory.remember(
+                    user_id=user_id,
+                    content=f"Investigation query: {q}\nSummary: {output[:500]}",
+                    agent_name="compliance_planner",
+                    memory_type="observation",
+                )
+                logger.debug("Wrote investigation observation to UserMemory for user=%s", user_id)
+            except Exception as mem_exc:
+                logger.warning("UserMemory write failed (non-critical): %s", mem_exc)
+
         result = {
             "query": q,
             "report": output,
@@ -382,8 +421,9 @@ async def investigate_stream(q: str = Query(..., min_length=1)):
 
 
 @app.post("/api/investigate")
-async def investigate(body: InvestigateRequest):
+async def investigate(request: Request, body: InvestigateRequest):
     """Batch investigation — runs the full supervisor loop and returns JSON."""
+    identity = extract_identity(request)
     trace_id = str(uuid.uuid4())
     pre_eval = await policy_engine.evaluate(
         PolicyStage.PRE_EXECUTION, policies, {"input": body.query}
@@ -394,13 +434,28 @@ async def investigate(body: InvestigateRequest):
 
     state: ComplianceState = {
         "input": body.query, "messages": [], "output": "",
+        "_identity": identity,
         "next_agent": "", "specialist_outputs": {}, "specialist_call_counts": {},
         "iterations": 0, "trace_id": trace_id, "policy_flags": [],
     }
     result = await executor.ainvoke(state)
+
+    output = result.get("output", "")
+    user_id = get_user_id(identity)
+    if output:
+        try:
+            await _user_memory.remember(
+                user_id=user_id,
+                content=f"Investigation query: {body.query}\nSummary: {output[:500]}",
+                agent_name="compliance_planner",
+                memory_type="observation",
+            )
+        except Exception as mem_exc:
+            logger.warning("UserMemory write failed (non-critical): %s", mem_exc)
+
     return {
         "query": body.query,
-        "report": result.get("output", ""),
+        "report": output,
         "iterations": result.get("iterations", 0),
         "trace_id": trace_id,
     }

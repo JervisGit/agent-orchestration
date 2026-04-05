@@ -28,12 +28,14 @@ from pathlib import Path
 from typing import TypedDict
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from ao.identity.extract import extract_identity, get_user_id
 from ao.memory.long_term import LongTermMemory
+from ao.memory.user_memory import UserMemory
 from ao.policy.engine import PolicyEngine
 from ao.policy.schema import PolicySet, PolicyStage
 from ao.runtime import AppRuntime
@@ -72,8 +74,11 @@ _runtime = AppRuntime.from_env(MANIFEST_PATH)
 executor = _runtime.executor
 llm      = _runtime.llm
 
-# ── Long-term vector memory ──────────────────────────────────────────
+# ── Long-term vector memory (document RAG) ──────────────────────────────
 _memory = LongTermMemory(connection_string=DATABASE_URL, app_id=APP_ID)
+
+# ── Per-user long-term memory (ADR-018) ──────────────────────────────
+_user_memory = UserMemory(connection_string=DATABASE_URL, app_id=APP_ID)
 
 # ── Embedding helper ─────────────────────────────────────────────────
 
@@ -177,7 +182,8 @@ _VECTOR_SEARCH_SCHEMA: dict = {
 
 # ── Wire executor ────────────────────────────────────────────────────
 executor.register_tool("vector_search", _tool_vector_search, _VECTOR_SEARCH_SCHEMA)
-compiled_graph = executor.compile(state_schema=dict)  # supervisor pattern with dict state
+# compile() is deferred to lifespan() so the PostgreSQL checkpointer (ADR-019) is set up first.
+# executor.astream() / ainvoke() use self._compiled internally.
 
 # ── Policy engine ────────────────────────────────────────────────────
 policy_engine = PolicyEngine()
@@ -206,6 +212,7 @@ class RAGState(TypedDict):
     next_agent: str
     trace_id: str
     policy_flags: list[str]
+    _identity: object | None    # IdentityContext injected by endpoint; propagated to tools
 
 # ── Step labels for workflow panel ──────────────────────────────────
 
@@ -373,6 +380,13 @@ SAMPLE_DOCS = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # PostgreSQL checkpointer for durable agent-to-agent state (ADR-019)
+    try:
+        await executor.setup_pg_checkpointer(DATABASE_URL)
+    except Exception as exc:
+        logger.warning("PostgreSQL checkpointer unavailable, falling back to MemorySaver: %s", exc)
+    executor.compile(state_schema=dict)
+
     db_ok = False
     try:
         await _memory.initialize()
@@ -380,6 +394,12 @@ async def lifespan(app: FastAPI):
         logger.info("LongTermMemory tables initialised")
     except Exception as exc:
         logger.warning("DB init failed (pgvector may not be available): %s", exc)
+
+    # Per-user long-term memory (ADR-018)
+    try:
+        await _user_memory.initialize()
+    except Exception as exc:
+        logger.warning("UserMemory init failed (non-critical): %s", exc)
 
     # Ingest sample docs on first run (skip if already present)
     if db_ok:
@@ -457,8 +477,10 @@ async def list_documents():
 
 
 @app.get("/api/search/stream")
-async def search_stream(q: str = Query(..., min_length=1)):
+async def search_stream(request: Request, q: str = Query(..., min_length=1)):
     """SSE endpoint: stream the search agent's progress and answer token-by-token."""
+    identity = extract_identity(request)
+
     async def generate():
         trace_id = str(uuid.uuid4())
         yield f"data: {json.dumps({'type': 'start', 'trace_id': trace_id})}\n\n"
@@ -477,6 +499,7 @@ async def search_stream(q: str = Query(..., min_length=1)):
             "input": q, "messages": [], "output": "", "sources": [],
             "specialist_outputs": {}, "specialist_call_counts": {},
             "next_agent": "", "trace_id": trace_id, "policy_flags": [],
+            "_identity": identity,
         }
 
         token_queue: asyncio.Queue = asyncio.Queue(maxsize=512)
@@ -533,6 +556,20 @@ async def search_stream(q: str = Query(..., min_length=1)):
         if post_eval.modified_data and post_eval.modified_data.get("output"):
             output = post_eval.modified_data["output"]
 
+        # Write search observation to per-user long-term memory (ADR-018).
+        user_id = get_user_id(identity)
+        if output:
+            try:
+                await _user_memory.remember(
+                    user_id=user_id,
+                    content=f"Search query: {q}\nAnswer summary: {output[:500]}",
+                    agent_name="retrieval_agent",
+                    memory_type="observation",
+                )
+                logger.debug("Wrote search observation to UserMemory for user=%s", user_id)
+            except Exception as mem_exc:
+                logger.warning("UserMemory write failed (non-critical): %s", mem_exc)
+
         sources = final_state.get("sources", [])
         result = {
             "query": q,
@@ -556,8 +593,9 @@ async def search_stream(q: str = Query(..., min_length=1)):
 
 
 @app.post("/api/search")
-async def search(body: SearchRequest):
+async def search(request: Request, body: SearchRequest):
     """Batch search — runs the full graph and returns the result as JSON."""
+    identity = extract_identity(request)
     trace_id = str(uuid.uuid4())
     pre_eval = await policy_engine.evaluate(
         PolicyStage.PRE_EXECUTION, policies, {"input": body.query}
@@ -570,11 +608,24 @@ async def search(body: SearchRequest):
         "input": body.query, "messages": [], "output": "", "sources": [],
         "specialist_outputs": {}, "specialist_call_counts": {},
         "next_agent": "", "trace_id": trace_id, "policy_flags": [],
+        "_identity": identity,
     }
     result = await executor.ainvoke(state)
+    output = result.get("output", "")
+    user_id = get_user_id(identity)
+    if output:
+        try:
+            await _user_memory.remember(
+                user_id=user_id,
+                content=f"Search query: {body.query}\nAnswer summary: {output[:500]}",
+                agent_name="retrieval_agent",
+                memory_type="observation",
+            )
+        except Exception as mem_exc:
+            logger.warning("UserMemory write failed (non-critical): %s", mem_exc)
     return {
         "query": body.query,
-        "answer": result.get("output", ""),
+        "answer": output,
         "sources": result.get("sources", []),
         "trace_id": trace_id,
     }

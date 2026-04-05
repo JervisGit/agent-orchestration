@@ -200,6 +200,31 @@ class ManifestExecutor:
         """Remove trace_id from the cancelled set after the caller has handled it."""
         self._cancelled_traces.discard(trace_id)
 
+    async def setup_pg_checkpointer(self, db_url: str) -> None:
+        """Replace the in-memory checkpointer with a PostgreSQL-backed one (ADR-019).
+
+        Persists full agent-to-agent LangGraph state (all nodes + messages) to
+        PostgreSQL after every node boundary, surviving process restarts and ACA
+        scaling events.  Call this **before** compile() inside the app lifespan.
+
+        Parameters
+        ----------
+        db_url : PostgreSQL connection string, e.g. the DATABASE_URL env var.
+        """
+        try:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        except ImportError as exc:
+            raise ImportError(
+                "langgraph-checkpoint-postgres is required for PostgreSQL checkpointing. "
+                "Install it: pip install langgraph-checkpoint-postgres"
+            ) from exc
+
+        checkpointer = AsyncPostgresSaver.from_conn_string(db_url)
+        await checkpointer.__aenter__()
+        await checkpointer.setup()
+        self._checkpointer = checkpointer
+        logger.info("PostgreSQL checkpointer initialised — agent state will be persisted to DB")
+
     # ── Tool helpers ─────────────────────────────────────────────────
 
     def _tools_list(self) -> list[dict] | None:
@@ -517,9 +542,9 @@ class ManifestExecutor:
     def compile(self, state_schema: type = RouterState) -> Any:
         """Build and compile the LangGraph from the manifest.
 
-        The graph is compiled with the shared checkpointer (Redis or MemorySaver) so
-        that state is saved after every node.  Pass thread_id in the LangGraph config
-        (via astream / ainvoke) to enable resume after interruption.
+        The graph is compiled with the current checkpointer (PostgreSQL or MemorySaver).
+        Call ``await setup_pg_checkpointer(db_url)`` **before** compile() if you want
+        durable agent-to-agent state persistence (ADR-019).
 
         Returns the compiled graph (same object returned by StateGraph.compile()).
         Also stored as self._compiled for use by astream()/ainvoke().
