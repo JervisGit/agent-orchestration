@@ -103,20 +103,15 @@
   .hitl-label input[type=checkbox] { display: none; }
   .hitl-slider { width: 36px; height: 20px; background: rgba(255,255,255,.35); border-radius: 10px; position: relative; transition: background .2s; flex-shrink: 0; }
   .hitl-slider::after { content: ''; position: absolute; width: 16px; height: 16px; background: #fff; border-radius: 50%; top: 2px; left: 2px; transition: transform .2s; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
-  .hitl-label input:checked + .hitl-slider { background: #ffb900; }
-  .hitl-label input:checked + .hitl-slider::after { transform: translateX(16px); }
+  .hitl-label input:checked + .hitl-slider { background: rgba(255,255,255,.75); }
+  .hitl-label input:checked + .hitl-slider::after { transform: translateX(16px); background: #0078d4; }
 
-  /* ── HITL approval modal ── */
-  .hitl-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 9999; }
-  .hitl-modal { background: #fff; border-radius: 4px; box-shadow: 0 8px 32px rgba(0,0,0,.25); padding: 28px 32px; max-width: 540px; width: 90%; }
-  .hitl-modal h3 { font-size: 17px; font-weight: 700; margin-bottom: 6px; color: #323130; }
-  .hitl-modal .hitl-desc { font-size: 13px; color: #605e5c; margin-bottom: 14px; }
-  .hitl-modal pre { background: #f8f8f8; border: 1px solid #e1dfdd; border-radius: 2px; padding: 10px 12px; font-size: 12px; font-family: 'Cascadia Code', Consolas, monospace; max-height: 220px; overflow-y: auto; white-space: pre-wrap; margin-bottom: 20px; color: #222; }
-  .hitl-modal .hitl-actions { display: flex; gap: 10px; justify-content: flex-end; }
-  .hitl-approve { background: #107c10; color: #fff; border: none; border-radius: 2px; padding: 9px 22px; font-size: 14px; cursor: pointer; font-weight: 600; }
-  .hitl-approve:hover { background: #0b6f0b; }
-  .hitl-reject  { background: #fff; color: #d13438; border: 1px solid #d13438; border-radius: 2px; padding: 9px 22px; font-size: 14px; cursor: pointer; font-weight: 600; }
-  .hitl-reject:hover  { background: #fde7e9; }
+  /* ── HITL inline approval row ── */
+  .hitl-action-row { display: flex; gap: 6px; margin-top: 7px; }
+  .hitl-approve-btn { background: #0078d4; color: #fff; border: none; border-radius: 2px; padding: 4px 14px; font-size: 12px; cursor: pointer; font-weight: 600; }
+  .hitl-approve-btn:hover { background: #106ebe; }
+  .hitl-reject-btn  { background: #f3f2f1; color: #605e5c; border: 1px solid #c8c6c4; border-radius: 2px; padding: 4px 14px; font-size: 12px; cursor: pointer; }
+  .hitl-reject-btn:hover  { background: #edebe9; }
 </style>
 </head>
 <body>
@@ -214,19 +209,6 @@
     </div>
     </div><!-- /investigatePanel -->
   </div><!-- /main-panel -->
-</div>
-
-<!-- ── HITL approval modal ── -->
-<div id="hitlOverlay" class="hitl-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="hitlTitle">
-  <div class="hitl-modal">
-    <h3 id="hitlTitle">&#x2713; Tool Approval Required</h3>
-    <p class="hitl-desc">The agent wants to call the tool below. Review the arguments then approve or reject.</p>
-    <pre id="hitlDetail"></pre>
-    <div class="hitl-actions">
-      <button class="hitl-reject" onclick="resolveHitl(false)">Reject</button>
-      <button class="hitl-approve" onclick="resolveHitl(true)">Approve</button>
-    </div>
-  </div>
 </div>
 
 <script>
@@ -406,7 +388,7 @@ function doInvestigate() {
     }
 
     if (msg.type === 'hitl_pending') {
-      showHitlModal(msg.request_id, msg.step_name, msg.payload);
+      showHitlInline(msg.request_id, msg.step_name, msg.payload);
     }
   };
   es.onerror = () => { document.getElementById('investigateBtn').disabled = false; es.close(); };
@@ -430,22 +412,39 @@ async function onHitlToggle() {
   } catch(e) { /* non-critical — backend may be unavailable */ }
 }
 
-function showHitlModal(requestId, stepName, payload) {
+function showHitlInline(requestId, stepName, payload) {
   _pendingHitlId = requestId;
-  const argsText = payload && payload.args
-    ? JSON.stringify(payload.args, null, 2)
-    : JSON.stringify(payload, null, 2);
-  document.getElementById('hitlDetail').textContent = `Tool: ${stepName}\n\nArguments:\n${argsText}`;
-  document.getElementById('hitlOverlay').style.display = '';
+  const args = payload && payload.args ? payload.args : payload;
+  const argStr = Object.entries(args || {}).map(([k, v]) =>
+    `${escHtml(k)}: <code>${escHtml(String(v))}</code>`
+  ).join(' &nbsp;|&nbsp; ');
+  const div = document.createElement('div');
+  div.className = 'step tool';
+  div.id = `hitl-step-${requestId}`;
+  div.innerHTML =
+    `<div style="display:flex;align-items:flex-start;gap:10px;width:100%;">`+
+    `<span class="step-dot" style="margin-top:4px;flex-shrink:0;"></span><div style="flex:1;">`+
+    `<strong>Awaiting approval — ${escHtml(stepName)}</strong>`+
+    (argStr ? `<br><span style="font-size:11px;color:#605e5c;">${argStr}</span>` : '')+
+    `<div class="hitl-action-row" id="hitl-actions-${requestId}">`+
+    `<button class="hitl-approve-btn" onclick="resolveHitl('${requestId}', true)">Approve</button>`+
+    `<button class="hitl-reject-btn" onclick="resolveHitl('${requestId}', false)">Reject</button>`+
+    `</div></div></div>`;
+  document.getElementById('steps').appendChild(div);
+  document.getElementById('stepsCard').style.display = '';
+  _stepCount++;
+  _updateWorkflowSummary();
 }
 
-async function resolveHitl(approved) {
-  if (!_pendingHitlId) return;
-  document.getElementById('hitlOverlay').style.display = 'none';
-  const id = _pendingHitlId;
-  _pendingHitlId = null;
+async function resolveHitl(requestId, approved) {
+  if (!requestId) return;
+  const row = document.getElementById(`hitl-actions-${requestId}`);
+  if (row) {
+    row.innerHTML = `<span style="font-size:11px;color:${approved ? '#0078d4' : '#a19f9d'};font-style:italic;">${approved ? '\u2713 Approved' : '\u00d7 Rejected'}</span>`;
+  }
+  if (_pendingHitlId === requestId) _pendingHitlId = null;
   try {
-    await fetch(`${API}/api/hitl/${id}/resolve`, {
+    await fetch(`${API}/api/hitl/${requestId}/resolve`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ approved }),
